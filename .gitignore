@@ -1,0 +1,9 @@
+__pycache__/
+.venv/
+
+# Downloaded source art (Wube's printable STLs); the converted .glb files are committed
+art-src/
+dist/
+
+# UI reference capture: its own Factorio config, write-data and save copies
+tools/ui_reference/run/

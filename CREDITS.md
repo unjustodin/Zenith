@@ -24,7 +24,7 @@ Wube published 3D-printable models of some Factorio entities on Printables
 those files (belts, undergrounds, chests, furnaces, assembling machine 1, inserters, the small
 pole, walls, the electric mining drill, the character, biters, spitters and the biter spawner)
 keeps Wube's licence, not MIT: each is listed, with its source files, in
-`client/assets/models/CREDITS.md`. Check each model's page for
+[client/assets/models/CREDITS.md](client/assets/models/CREDITS.md). Check each model's page for
 its exact terms before converting it.
 
 ## Models converted from FUE5
@@ -32,7 +32,7 @@ its exact terms before converting it.
 FUE5 (https://github.com/FUE5BASE/FUE5), a fan project that rebuilt Factorio in Unreal Engine 5,
 by Hurricane and Nuke, publishes its 3D models and textures under **CC BY-NC-SA 3.0**
 (https://creativecommons.org/licenses/by-nc-sa/3.0/): non-commercial, share-alike. The models in
-`client/assets/models/fue5/` were converted from its FBX files
+[client/assets/models/fue5/](client/assets/models/fue5/README.md) were converted from its FBX files
 and textures by `tools/models/fue5.py` (scaled to tiles, turned to face north, cut at the ground,
 decimated, their textures baked into one atlas each). They keep that licence, not MIT, and the
 client draws them in place of our own models of the same name. The original files aren't in this

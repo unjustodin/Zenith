@@ -1,0 +1,9 @@
+{
+  "name": "f3d-ui-capture",
+  "version": "0.1.0",
+  "title": "Zenith: UI reference capture",
+  "author": "Zenith",
+  "factorio_version": "2.1",
+  "description": "Opens every GUI it can and screenshots it, for the 3D client's UI comparison.",
+  "dependencies": ["base", "? space-age"]
+}

@@ -1,0 +1,76 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[application]
+
+config/name="Zenith"
+config/version="0.1.0"
+config/description="3D client for a running Factorio game, via the factorio-3d-bridge mod."
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.4", "Forward Plus")
+config/icon="res://icon.svg"
+config/project_settings_override="user://engine.cfg"
+
+[autoload]
+
+Bridge="*res://scripts/net/bridge.gd"
+
+[display]
+
+window/size/viewport_width=1600
+window/size/viewport_height=900
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/zenith_export/plugin.cfg")
+
+[rendering]
+
+driver/threads/thread_model=1
+
+anti_aliasing/quality/msaa_3d=2
+limits/global_shader_variables/buffer_size=524288
+
+[shader_globals]
+
+f3d_fade={
+"type": "float",
+"value": 0.0
+}
+f3d_fade_eye={
+"type": "vec3",
+"value": Vector3(0, 0, 0)
+}
+f3d_fade_target={
+"type": "vec3",
+"value": Vector3(0, 0, 0)
+}
+f3d_fade_cursor={
+"type": "vec3",
+"value": Vector3(0, 0, 0)
+}
+f3d_anim_time={
+"type": "vec2",
+"value": Vector2(0, 0)
+}
+f3d_mover_clock={
+"type": "vec4",
+"value": Vector4(0, 0, 60, 0)
+}
+f3d_movers={
+"type": "sampler2D",
+"value": ""
+}
+
+[xr]
+
+openxr/enabled=false
+openxr/startup_alert=false
+shaders/enabled=true

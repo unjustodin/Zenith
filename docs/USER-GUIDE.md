@@ -9,9 +9,6 @@ command-line options); [ARCHITECTURE.md](../ARCHITECTURE.md) is for people worki
 
 ## What you need
 
-> Neither the download nor the code is published yet: this repository has the documentation
-> only for now. This guide shows how installing and playing will work once they are.
-
 - **Factorio 2.1** (Space Age is optional). Your own copy: the client reads Factorio's graphics,
   sounds, fonts and names from your install and never copies them.
 - **Zenith itself:** the download (`Zenith-<version>-windows.zip`, or `-linux`), or this
@@ -114,7 +111,7 @@ Factorio window).
   it measures for six seconds first and goes a preset lower if the game or the frames fall short.
 - **Graphics → Smooth belt items** (on): items on belts update five times a second and follow the
   curves. Off, the server reads them a little each tick on a busy base and they update less often
-  (on the owner's save it made no measurable difference to UPS).
+  (on my own save it made no measurable difference to UPS).
 - **Graphics → Hold the game at 60 UPS** (on): when the game runs slow on a big base, the client
   asks the bridge for less for a while (shorter distances, fewer minimap refreshes, then a lower
   frame rate) and gives it back when the game recovers. Your settings stay as they are; F4 shows
@@ -133,12 +130,20 @@ Factorio window).
 ## Add-ons
 
 Add-ons add to what Zenith does, for example a cinematic camera for filming your base. One is a
-folder: put it in Zenith's add-ons folder, `%APPDATA%\Godot\app_userdata\Zenith\addons\` on
-Windows (or an `addons` folder beside `Zenith.exe`), and start Zenith. The main menu's **Mods**
-window lists the add-ons found, with a switch for each and its options; an add-on that needs a
-newer Zenith says so there. Their keys are in Settings → Controls, under each add-on's name.
-Add-ons can move the camera and change what is shown, never the game itself. Writing one:
-[ADDONS.md](ADDONS.md).
+folder or a .zip of it (no need to unpack it): put it in Zenith's add-ons folder, `%APPDATA%\Godot\app_userdata\Zenith\addons\` on
+Windows (or an `addons` folder beside `Zenith.exe`), and start Zenith. The **Add-ons** menu (on
+the main menu, in the game menu that Esc opens, and at the bottom of Settings) lists every add-on
+found with its version, whether it's on, and why it couldn't load (for example one that needs a
+newer Zenith). Click one for its page: its switch, its settings (changed there at once, in a game
+too, and kept for next time) and its keys, rebound as in Settings → Controls (click, press the
+key; right click clears). With two copies of one add-on (a folder and a zip, say), the newer
+version is used and its page says so. The Mods window lists them as well. Add-ons can move the camera and
+change what is shown, never the game itself. Writing one: [ADDONS.md](ADDONS.md).
+
+An add-on that records in the background (the Cinematic camera's recorder) keeps Zenith drawing
+while its window is behind Factorio's: Zenith isn't minimised when it loses focus while it
+records. Don't minimise Zenith yourself while recording: a minimised window draws nothing, so
+nothing is recorded meanwhile.
 
 ## Several players
 

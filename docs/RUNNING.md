@@ -364,7 +364,7 @@ the newest client takes over instead.
 
 ## Single-player (hybrid mode)
 
-**New.** The owner has played it once, side by side with Factorio's window, on Factorio 2.1.24:
+**New.** I've played it once, side by side with Factorio's window, on Factorio 2.1.24:
 `send_udp` and `recv_udp` work without a player argument in single-player. It hasn't been tried
 much beyond that, so the headless server above is still the main setup.
 
@@ -784,7 +784,7 @@ the server console or RCON, for example `/c settings.global["f3d-chunks-per-tick
 - **Low frame rate on a busy base or in a forest**: Settings → Graphics → Preset sets shadows,
   ambient occlusion, level of detail, the distances and clouds together (High is the defaults;
   Medium turns ambient occlusion off, Low also halves the shadow detail and the distances). Most of
-  the GPU's time in a dense view goes to ambient occlusion (about 3 ms a frame on the owner's base
+  the GPU's time in a dense view goes to ambient occlusion (about 3 ms a frame on my own base
   at High), trees' leaves and shadows (about 1.5 ms since they are fitted to the view).
 - **Crashes, a hang on quitting or flickering with Render on a separate thread**: that mode
   (Godot's own, experimental, off by default) measured no faster here and can hang on quitting.

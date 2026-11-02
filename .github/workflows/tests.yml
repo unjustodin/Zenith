@@ -1,0 +1,172 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+env:
+  GODOT_VERSION: "4.7.2"
+  FACTORIO_VERSION: "2.1.23"
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: pip install lupa "gdtoolkit==4.*"
+      - name: Bridge mod against the fake Factorio API
+        run: python tools/mod_tests/test_bridge.py
+      - name: Mock server over UDP
+        run: python tools/test_mock_server.py
+      - name: GDScript parses
+        run: |
+          status=0
+          for f in $(find client -name '*.gd'); do
+            gdparse "$f" > /dev/null || { echo "FAIL $f"; status=1; }
+          done
+          exit $status
+      - name: Every model passes check.py
+        run: python tools/models/check.py
+      - name: Fuzz the mod (malformed, truncated, out-of-order packets)
+        run: python tools/mod_tests/test_fuzz.py
+      - name: Fuzz the mock
+        run: python tools/test_mock_fuzz.py
+
+  # The client's UI test (client/tests/ui_test.tscn) in headless Godot. Without a Factorio
+  # install the UI falls back to flat panels, which is what this checks: input paths and
+  # model hooks, not looks.
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache Godot
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/godot
+          key: godot-${{ env.GODOT_VERSION }}
+      - name: Download Godot
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/godot
+          curl -fsSL -o /tmp/godot.zip "https://github.com/godotengine/godot-builds/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          unzip -q /tmp/godot.zip -d ~/godot
+          mv ~/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64 ~/godot/godot
+      - name: Import the project
+        run: ~/godot/godot --headless --path client --import
+      # A GDScript runtime error only stops that call, so the exit code can't show it: fail on
+      # any SCRIPT ERROR in the output.
+      - name: UI test
+        run: |
+          set -o pipefail
+          ~/godot/godot --headless --path client res://tests/ui_test.tscn 2>&1 | tee ui_test.log
+          ! grep -n "SCRIPT ERROR" ui_test.log
+      - name: Fuzz the client's packet parsing
+        run: |
+          set -o pipefail
+          ~/godot/godot --headless --path client res://tests/bridge_fuzz_test.tscn 2>&1 | tee fuzz.log
+          ! grep -n "SCRIPT ERROR" fuzz.log
+      - name: Decoratives layer
+        run: |
+          set -o pipefail
+          ~/godot/godot --headless --path client res://tests/decor_test.tscn 2>&1 | tee decor.log
+          ! grep -n "SCRIPT ERROR" decor.log
+      - name: Add-ons
+        run: |
+          set -o pipefail
+          ~/godot/godot --headless --path client res://tests/addon_test.tscn 2>&1 | tee addons.log
+          ! grep -n "SCRIPT ERROR" addons.log
+      - name: VR panel and session without a headset
+        run: |
+          set -o pipefail
+          ~/godot/godot --headless --path client res://tests/vr_test.tscn 2>&1 | tee vr.log
+          ! grep -n "SCRIPT ERROR" vr.log
+
+  # The bridge mod in the real game: Factorio's free Linux headless build, a new map, then
+  # tools/live_check.py over UDP and RCON, as on a desktop PC.
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cache Factorio
+        id: factorio-cache
+        uses: actions/cache@v4
+        with:
+          path: server/factorio
+          key: factorio-headless-${{ env.FACTORIO_VERSION }}
+      - name: Download Factorio
+        if: steps.factorio-cache.outputs.cache-hit != 'true'
+        run: server/download-headless.sh "$FACTORIO_VERSION"
+      - name: Start the server
+        run: |
+          server/run-headless.sh > server/server.log 2>&1 &
+          for i in $(seq 90); do
+            if grep -q "Hosting game at" server/server.log 2>/dev/null && (exec 3<>/dev/tcp/127.0.0.1/34198) 2>/dev/null; then
+              echo "server up after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          cat server/server.log; exit 1
+      - name: live_check
+        run: python tools/live_check.py
+      - name: Server log
+        if: always()
+        run: cat server/server.log
+
+  # What the bridge costs on a big base: tools/busy_base.py builds 20,000+ entities (belt loops,
+  # assemblers, a main bus, a train, robots, walls) next to the character in headless Factorio,
+  # then profiles the mod per module with a client connected. Fails on a big regression against
+  # tools/busy_budget.json; the numbers are uploaded either way.
+  busy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cache Factorio
+        id: factorio-cache
+        uses: actions/cache@v4
+        with:
+          path: server/factorio
+          key: factorio-headless-${{ env.FACTORIO_VERSION }}
+      - name: Download Factorio
+        if: steps.factorio-cache.outputs.cache-hit != 'true'
+        run: server/download-headless.sh "$FACTORIO_VERSION"
+      - name: Start the server
+        run: |
+          server/run-headless.sh > server/server.log 2>&1 &
+          for i in $(seq 90); do
+            if grep -q "Hosting game at" server/server.log 2>/dev/null && (exec 3<>/dev/tcp/127.0.0.1/34198) 2>/dev/null; then
+              echo "server up after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          cat server/server.log; exit 1
+      # The decoratives' pictures (file names and numbers only) for client/data/decoratives.json,
+      # from this Factorio's prototypes: compared with the committed file, printed when it differs.
+      - name: Decorative index is current
+        run: |
+          python tools/decor_index.py --factorio server/factorio --out decoratives.json
+          if ! cmp -s decoratives.json client/data/decoratives.json; then
+            echo "client/data/decoratives.json differs from this Factorio's; new one:"; cat decoratives.json; echo
+          fi
+      - name: Build a big base and measure the bridge
+        run: python tools/busy_base.py --big --measure busy.json --budget tools/busy_budget.json
+      - name: Upload the numbers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: busy
+          path: busy.json
+          if-no-files-found: ignore
+      - name: Server log
+        if: always()
+        run: tail -200 server/server.log

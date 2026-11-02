@@ -1,11 +1,8 @@
 # Making models for Zenith
 
-> The code isn't published yet: this repository has the documentation only for now. This
-> page shows how it will work once Zenith is out.
-
 A guide for 3D modellers. Zenith draws every Factorio entity with a 3D model; this page says what a
 model needs so the game can use it. The full technical reference, with every table, is
-`client/assets/models/README.md`.
+[client/assets/models/README.md](../client/assets/models/README.md).
 
 ## The look
 
@@ -87,6 +84,32 @@ to the maintainer before starting one.
 
 With the source code, `python3 tools/models/check.py <name>` checks the name, footprint, origin,
 facing and triangle budget, and `tools/models/review.py <name>` takes screenshots in the game.
+
+## Improving the models over time
+
+Zenith's models are a starting point, not the final word. Most were built quickly to cover every
+entity, so some read differently from Factorio's sprites, and the FUE5 models follow older Factorio
+designs in places. The plan is to work with 3D modellers to improve them over time, a few at a time,
+worst first.
+
+How that works:
+
+1. **Pick what to work on.** Start with the models that look most wrong in the game. The asset
+   inventory ([ASSET-INVENTORY.md](ASSET-INVENTORY.md)) says how far each family is along and
+   what's short; agree the list with the maintainer so two people don't redo the same model.
+2. **Start from what's there or from scratch.** The current `.glb` files are a fine base to
+   refine, or replace one entirely, as long as the result follows this guide.
+3. **Try it in the game** with `--models=<your folder> --models-first` (above), from the default
+   view and Factorio's view (F6), beside the real entities.
+4. **Send the files** (the `.glb`, any textures inside it, and a line on what changed). The
+   maintainer checks them (`check.py`: name, size, origin, facing, triangles), looks at them in the
+   game, and adds them to the next release, with the modeller credited in
+   [CREDITS.md](../CREDITS.md).
+5. **Releases bring them to players.** Each new release ships the models finished since the last
+   one, so the game looks better release by release; nothing changes in players' saves.
+
+A model that replaces one with its own licence (a FUE5 model, say) replaces it for good once it's
+in: the old one stays in the project's history.
 
 ## Licence
 

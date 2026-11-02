@@ -18,7 +18,7 @@ open source (MIT): fork it and build on it (the project doesn't take pull reques
 | Keep your models outside the project | Start the client with `--models=<folder>` | Works |
 | Make parts of a model move | Name the nodes `anim_*` | Works, for the kinds listed below |
 | Play with other Factorio mods | Turn them on in the menu's Mods window | Works; their entities are boxes until modelled |
-| Add your own camera, windows, overlays or behaviour | An add-on: a folder with an `addon.json` and a script ([docs/ADDONS.md](docs/ADDONS.md)) | Works (add-on API 1) |
+| Add your own camera, windows, overlays or behaviour | An add-on: a folder with an `addon.json` and a script ([docs/ADDONS.md](docs/ADDONS.md)) | Works (add-on API 1.1; drop the zip in `addons`) |
 | Add effects or sounds to the world itself | Change the client's code | No add-on hooks yet |
 
 ## Adding a 3D model
@@ -34,7 +34,7 @@ Put the model in either place:
 
 - `client/assets/models/<prototype-name>.glb`: part of the project; Godot imports it. Models
   under a licence of their own sit in a subfolder the client looks in first (`fue5/`, FUE5's
-  models: `its README`).
+  models: [its README](client/assets/models/fue5/README.md)).
 - Any folder of your own, loaded at runtime with `--models=<folder>`:
 
   ```bash
@@ -93,7 +93,7 @@ out of the static mesh and moves it itself:
 | Kinds listed in `CYCLES` | Slide, swing or spin once per loop of Factorio's animation while the machine works (pistons, cranks, arms) |
 
 The full table, with speeds and which models use each, is in
-`client/assets/models/README.md`.
+[client/assets/models/README.md](client/assets/models/README.md).
 
 ### Variants
 
@@ -104,7 +104,7 @@ per direction drawn unturned (`<name>-east.glb`, `-south`, `-west`) for the enti
 `FACING_MODELS` (boiler, chemical plant, inserters...), where Factorio's four pictures are separate
 renders. A modded
 belt or pipe gets its curves and shapes the same way, by name. The list is in
-`client/assets/models/README.md`.
+[client/assets/models/README.md](client/assets/models/README.md#variants).
 
 ## Playing with other Factorio mods
 
@@ -131,7 +131,7 @@ Testing with a mod is the most useful thing anyone can do right now: report what
 
 The goal is that mod authors can ship 3D content for their own mods, and players can add their
 own ideas to the client, without forking the project. Client add-ons are the first part of that
-and work today ([docs/ADDONS.md](docs/ADDONS.md), add-on API 1: the camera, keys, windows, the
+and work today ([docs/ADDONS.md](docs/ADDONS.md), add-on API 1.1: the camera, keys, settings, windows, the
 world read-only, events, frames, lighter updates and data); more hooks come as add-ons need them.
 
 Planned, roughly in order:

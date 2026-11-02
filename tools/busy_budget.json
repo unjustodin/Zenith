@@ -1,0 +1,17 @@
+{
+ "_comment": "CI's busy job: tools/busy_base.py --big --measure busy.json --budget tools/busy_budget.json fails when a number is over the budget times --tolerance (2), or a module over 0.1 ms. Set from CI runs on ubuntu-latest, 2026-10-28, which vary by about 1.5x between runners: total 6-9 ms, belt_items 4.5-6.6 ms (before task 24: 23 ms and 21 ms, UPS 40). Times are ms of script per tick; kb_per_s is what the client receives.",
+ "min_entities": 20000,
+ "total_ms": 6.5,
+ "kb_per_s": 700.0,
+ "snapshot_ms_per_chunk": 3.0,
+ "modules_ms": {
+  "belt_items": 5.0,
+  "movers": 0.8,
+  "puppet": 0.4,
+  "planets": 0.3,
+  "tracker": 0.2,
+  "alerts": 0.1,
+  "inserters": 0.1,
+  "world": 0.05
+ }
+}

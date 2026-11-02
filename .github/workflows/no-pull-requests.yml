@@ -1,0 +1,24 @@
+# Zenith has one maintainer and doesn't take pull requests (CONTRIBUTING.md). Forks are welcome.
+# This closes a pull request from anyone else with a short note. It never checks out the pull
+# request's code, so pull_request_target is safe here.
+name: Pull requests
+on:
+  pull_request_target:
+    types: [opened, reopened]
+permissions:
+  pull-requests: write
+jobs:
+  close:
+    if: github.event.pull_request.author_association != 'OWNER'
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh pr close "$NUMBER" --repo "$REPO" --comment "$NOTE"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          NOTE: >-
+            Thanks for taking the time. Zenith is a one-person project and doesn't take pull
+            requests, so this one is closed automatically. You're welcome to keep the change in
+            your own fork: the code is MIT-licensed (see CONTRIBUTING.md). Bug reports are welcome
+            as issues.

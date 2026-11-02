@@ -1,0 +1,14 @@
+---------------------------------------------------------------------------------------------------
+Version: 0.1.0
+Date: 2026-10-27
+  Features:
+    - Streams the world near the 3D client's camera over localhost UDP: chunks with their tiles and entities, changes as they happen, moving things, items on belts, on the ground and in inserter hands, fluids, power, day and night.
+    - Plays a character for the client: walking, mining, building (with fast-replace, rails, quality and ghosts), crafting, inventory, quickbar, shooting, driving, picking up.
+    - Machine screens: inventories, recipes, filters, limits, combinators, circuit and logistic conditions, turret priority targets, train schedules and stops, logistic chests and roboports.
+    - Blueprints, books, deconstruction and upgrade planners, copy and paste, wire tools.
+    - Research, map and map tags, production and kill statistics, chat, Factoriopedia data, the armour's equipment grid.
+    - Space Age: space platforms, the other planets (demolishers, lightning, Gleba's plants and spoiling, Aquilo's freezing), cargo pods.
+    - Factorio's alerts worked out for a character without a player.
+    - Several 3D clients on one server, each with its own character.
+    - Single-player (hybrid) mode plays the player's own character; on a server it can stand in for a player while they're away.
+    - Console commands /f3d-status, /f3d-selftest, /f3d-platform, /f3d-player, /f3d-profile.

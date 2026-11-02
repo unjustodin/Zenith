@@ -132,7 +132,7 @@ Things to know about the UDP channel:
   prototype name, and a missing model falls back to a box sized from the selection box.
 - **Animated parts:** nodes named `anim_*` (`anim_spin_*`, `anim_glow_*`, `anim_lit_*`, ...), which
   the client cuts out and drives from the machine's state without a skeleton; the full list is
-  in `client/assets/models/README.md`.
+  in [client/assets/models/README.md](../client/assets/models/README.md).
 
 ---
 

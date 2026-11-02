@@ -1,0 +1,8 @@
+{
+	"id": "test-addon",
+	"name": "Test add-on",
+	"version": "1.0.0",
+	"api": 1,
+	"entry": "main.gd",
+	"description": "Used by tests/addon_test.gd: a key of each kind, the camera, its options."
+}
