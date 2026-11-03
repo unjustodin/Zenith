@@ -1518,6 +1518,33 @@ tick(30)
 cq = of_type(take(), "cq")
 check([m["l"] for m in cq] == [[]], f"an empty queue is sent once: {cq}")
 
+# Finished hand-crafts go into the production statistics (2.1.23 leaves a player-less character's
+# out, and with them "craft an item" research triggers such as the lab for red science, issue #7).
+lua.eval("function() for i = #F.flowed, 1, -1 do F.flowed[i] = nil end end")()
+send({"t": "craft", "recipe": "transport-belt", "n": 1})
+send({"t": "craft", "recipe": "iron-gear-wheel", "n": 3})
+tick(2)
+# The game finishing crafts, as the fake shows it: entries leave the front (cancel_crafting called
+# here, not through the bridge's command, so the bridge sees only a shorter queue).
+finish = lua.eval("""function(gone, left)
+  local c = storage.f3d.puppet
+  for _ = 1, gone do local f = c.crafting_queue[1]; c.cancel_crafting({ index = f.index, count = f.count }) end
+  if left then local f = c.crafting_queue[1]; c.cancel_crafting({ index = f.index, count = f.count - left }) end
+end""")
+flowed = lambda: [tuple(r.values()) for r in F.flowed.values()]
+check(flowed() == [], f"nothing counted while the queue only grows by commands: {flowed()}")
+finish(1, 2)
+tick(1)
+check(flowed() == [("item", "transport-belt", 2), ("item", "iron-gear-wheel", -1), ("item", "iron-plate", -1),
+                   ("item", "iron-gear-wheel", 1), ("item", "iron-plate", -2)],
+      f"a finished belt and one of three gears counted, products in and ingredients out: {flowed()}")
+finish(1, None)
+tick(1)
+check(flowed()[-2:] == [("item", "iron-gear-wheel", 2), ("item", "iron-plate", -4)] and len(flowed()) == 7,
+      f"the last two gears counted when the queue empties: {flowed()}")
+tick(5)
+check(len(flowed()) == 7, "nothing more once the queue is empty")
+
 # --- research ---------------------------------------------------------------------------------------
 lua.eval("function() storage.f3d.techs_dirty = true end")()
 tick(2)

@@ -133,6 +133,61 @@ local function send_queue(c, s)
   transport.send_now({ t = "cq", pr = math.floor(progress * 1000 + 0.5), l = list })
 end
 
+-- Factorio puts a player's hand-crafting in the force's production statistics, and that is also
+-- what sets off "craft an item" research triggers (2.x: a lab unlocks red science). A character
+-- with no player gets neither (checked in 2.1.23: a lab hand-crafted, the statistics still 0 and
+-- the trigger never fired; recording it with on_flow fired it), so the bridge records its
+-- character's finished crafts itself. A character a player is in is left to Factorio.
+local function record_crafts(c, done)
+  local stats = c.force.get_item_production_statistics(c.surface)
+  for _, d in ipairs(done) do
+    local recipe = prototypes.recipe[d[1]]
+    if recipe then
+      for _, p in pairs(recipe.products or {}) do
+        if p.type == "item" then
+          local amount = p.amount or ((p.amount_min or 1) + (p.amount_max or 1)) / 2
+          stats.on_flow(p.name, amount * (p.probability or 1) * d[2])
+        end
+      end
+      for _, i in pairs(recipe.ingredients or {}) do
+        if i.type == "item" then
+          stats.on_flow(i.name, -i.amount * d[2])
+        end
+      end
+    end
+  end
+end
+
+-- Between commands the queue only changes by crafting, which finishes its front: whole entries
+-- gone, then fewer of the next. A command that adds or cancels crafts clears the last look
+-- (`craft_seen`), so that tick is only looked at, not counted.
+local function count_crafts(c, s)
+  local seen = s.craft_seen
+  if seen == nil and c.crafting_queue_size == 0 then
+    return
+  end
+  local now = {}
+  for i, item in ipairs(c.crafting_queue or {}) do
+    now[i] = { item.recipe, item.count }
+  end
+  if seen and s.craft_unit == c.unit_number and #now <= #seen and not c.player then
+    local done = {}
+    local gone = #seen - #now
+    for i = 1, gone do
+      done[#done + 1] = seen[i]
+    end
+    local next, left = seen[gone + 1], now[1]
+    if next and left and next[1] == left[1] and left[2] < next[2] then
+      done[#done + 1] = { next[1], next[2] - left[2] }
+    end
+    if #done > 0 then
+      record_crafts(c, done)
+    end
+  end
+  s.craft_seen = #now > 0 and now or nil
+  s.craft_unit = c.unit_number
+end
+
 ---------------------------------------------------------------------------------------------
 -- Commands
 
@@ -146,6 +201,7 @@ function M.cancel_craft(cmd)
   for _, item in ipairs(c.crafting_queue or {}) do
     if item.index == i then
       c.cancel_crafting({ index = i, count = math.min(n, item.count) })
+      storage.f3d.craft_seen = nil
       send_queue(c, storage.f3d)
       return
     end
@@ -160,6 +216,7 @@ function M.tick()
   if not c then
     return
   end
+  count_crafts(c, s)
   if game.tick % DETAILS_INTERVAL == 0 or s.rdet_sig == nil then
     send_details(c, s, hand_recipes(c))
   end

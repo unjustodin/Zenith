@@ -1265,6 +1265,7 @@ def water_cane():
 kit.MATERIALS.update({
     "flesh_shell_light": ("8a7f80", 0.75, 0.0, None, 0),
     "flesh_shell_dark": ("4e4646", 0.8, 0.0, None, 0),
+    "flesh_shell_husk": ("383234", 0.85, 0.0, None, 0),  # a dead stomper's shell, darker than the living one
     # Stomper legs, from its leg sprites under their tint: the thigh dark purple at the hip,
     # ribbed ochre towards the knee; the knee and shin warty red-brown; the foot a dark pad.
     "flesh_stomper_hip": ("2a1a1a", 0.7, 0.0, None, 0),
@@ -1368,9 +1369,36 @@ def _strafer(scale):
     return _pentapod(scale, "strafer-torso", STRAFER_TORSO, STRAFER_HEIGHT, STRAFER_LEGS, STRAFER_KNEE, _strafer_leg)
 
 
+def _stomper_shell(scale):
+    """The shell a dead stomper leaves (a rock-like simple-entity, mined for stone and spoilage),
+    from Factorio's stomper-corpse-head picture: a rounded, lumpy dome of dark mauve-grey armour a
+    little past its collision box, studded with pale spikes and dark pits. In fights it had been a
+    big cream box. `scale` is the tier's (gleba.py PENTAPOD_TIERS: 1 is the big stomper's)."""
+    ss = 1.76 * scale  # Factorio's stomper_scale for this tier (1.1 x 1.6 for the big one)
+    w, d, rz = 3.6 * ss * 0.55, 2.9 * ss * 0.55, 1.4 * ss  # half width, half depth, half height
+    cz = rz - 0.25 * ss  # sunk a quarter tile (big) so the underside doesn't show
+    p = Part()
+    blob(p, (0, 0, cz), 1.0, "flesh_shell_husk", segs=20, rings=12, scale=(w, d, rz), seed=11, wobble=0.1)
+    rnd = kit.rng(29)
+    for _ in range(26):
+        # Points on the dome's upper part, each spike standing out along the surface's normal.
+        a = rnd.uniform(0, 2 * math.pi)
+        e = rnd.uniform(0.25, 1.3)
+        n = Vector((math.cos(a) * math.cos(e), math.sin(a) * math.cos(e), math.sin(e)))
+        base = Vector((n.x * w * 0.97, n.y * d * 0.97, cz + n.z * rz * 0.97))
+        out = Vector((n.x / w, n.y / d, n.z / rz)).normalized()
+        if rnd.random() < 0.6:
+            stalk(p, [base, base + out * rnd.uniform(0.15, 0.32) * ss], 0.08 * ss, 0.01, "flesh_shell",
+                  segs=6, smooth=0)
+        else:
+            p.sphere(tuple(base - out * 0.03 * ss), rnd.uniform(0.06, 0.1) * ss, "flesh_eye", segs=6, rings=3)
+    return p
+
+
 for _prefix, _scale in PENTAPOD_TIERS:
     model(_prefix + "stomper-pentapod")(lambda s=_scale: _stomper(s))
     model(_prefix + "strafer-pentapod")(lambda s=_scale: _strafer(s))
+    model(_prefix + "stomper-shell")(lambda s=_scale: _stomper_shell(s))
 
 
 # Wriggler: the run sprite's grub, a small olive head (black eyes at the front) on five long

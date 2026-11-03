@@ -33,6 +33,7 @@ made by `tools/record_menu_world.py`):
   - **Load game**: the server's saves (`server/saves/*.zip`) and your own Factorio saves
     (`%APPDATA%\Factorio\saves`, with their preview picture; loading one copies it into
     `server/saves` first, the original is never touched), with the date last played and size.
+    Folders show first, in brackets as in Factorio: a click goes in, `[..]` back up.
     **Load** (or double-click) starts headless Factorio on the save and connects to it; **Delete**
     moves a server save to the recycle bin (after asking).
   - **Single-player (hybrid)**: how to set up your own game, and a Connect button. Hybrid mode is
@@ -92,7 +93,8 @@ made by `tools/record_menu_world.py`):
   - **Camera**: the view a game starts in (Angled view, Factorio's view or First person), the
     angled view's projection (Perspective or Orthographic; Factorio's view, F6, is always
     orthographic), the map's remote view's projection (F7 switches the view in use and keeps it),
-    the furthest zoom (60-400 tiles, 140 by default), mouse sensitivity, invert mouse look.
+    the furthest zoom (60-400 tiles, 140 by default), how far the view zoomed in from the map zooms
+    out before the map comes back (80-480 tiles, 240 by default), mouse sensitivity, invert mouse look.
   - **Factorio install**: path to `factorio.exe` (or its folder; empty finds it), the server's
     data and saves folders, the first port servers use.
 - **Mods**: base, the DLC and the mods in the server's mods folder, with versions and on/off boxes,
@@ -445,7 +447,7 @@ puts back what it borrowed. On a server the same command answers over RCON
 | Shift+1 – 0, X | Show quickbar page 1–10, swap the two quickbar rows |
 | Middle click an inventory slot | Filter it to its item (or the held one); again clears it |
 | Click a car or wagon | Open it: fuel, trunk, ammo, cargo; a train's window has Factorio's schedule (every wait condition, and/or), interrupts, Go to station now (a temporary stop), the whole train's cargo and fuel, and a camera above it. A train stop's: name, limit, priority, circuit settings |
-| Map: zoom in past the closest zoom | Remote view there (in Factorio's angle, F6's view), on any surface the map shows: WASD moves it, Esc or M goes back to the character. Ground no working radar, roboport (its construction area) or the character sees lies under a dark fog, with nothing moving there |
+| Map: zoom in past the closest zoom | Remote view there (in Factorio's angle, F6's view), on any surface the map shows: WASD moves it, Esc or M goes back to the character, and zooming back out goes to the map there. Ground no working radar, roboport (its construction area) or the character sees lies under a dark fog, with nothing moving there |
 | Ctrl+F9 | Show in Factorio: bring Factorio's window to the front on the same game (or start it joined to the server the client started) |
 | , / . | Turn the camera 90° |
 | Middle-mouse drag | Turn the camera freely (left/right) and tilt it (up/down) |
@@ -505,8 +507,9 @@ marked for deconstruction get the red cross, for upgrade the green arrow. The ic
 install's `core/graphics` (plain coloured discs without one).
 
 Items on belts and on the ground are drawn as cards with the item's icon, read from your Factorio install (the
-client looks in the usual Steam and standalone locations; `--factorio-data` points it at the
-`data` folder otherwise). Without icons, items are small coloured blocks. The headless build
+client looks beside the factorio.exe set in Settings → Factorio first, then the usual Steam and
+standalone locations; `--factorio-data` points it at the `data` folder otherwise). The install is
+found once at start-up: after changing that setting, restart Zenith (Settings and the main menu say so). Without icons, items are small coloured blocks. The headless build
 has no graphics, so it can't supply icons.
 
 The ground uses Factorio's own tile pictures from the same install: `base/prototypes/tile/tiles.lua`

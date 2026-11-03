@@ -12,8 +12,6 @@ extends RefCounted
 ## - running_with_gun and idle_with_gun: the gun held out towards the target while firing, at
 ##   the ready for a while after (ticks_to_stay_in_combat 600, ten seconds), the upper body
 ##   twisting towards the aim while the legs run, kicked back by each shot (kick());
-## - crafting: hands busy in front while the crafting queue isn't empty (Factorio has no such
-##   picture; a gentle stand-in so a long queue shows);
 ## - dead: falls on its back.
 ##
 ## Layers blend in and out over a fraction of a second, so changing state never snaps.
@@ -42,7 +40,6 @@ var mining := false
 var aiming := false  # shooting at something
 var firing := false  # shots going off
 var aim_twist := 0.0  # radians from where the legs face to the aim, + to the left
-var crafting := false
 var dead := false
 ## In mech armour (Space Age's mech-armor animations): the right forearm is a gun and the left a
 ## claw, so no pickaxe or hand gun; a long, crouching stride; mining swings the claw.
@@ -57,7 +54,7 @@ var _run_phase := 0.0
 var _mine_clock := 0.0
 var _combat := 0.0
 var _fall := 0.0
-var _w := {"run": 0.0, "mine": 0.0, "aim": 0.0, "ready": 0.0, "craft": 0.0}
+var _w := {"run": 0.0, "mine": 0.0, "aim": 0.0, "ready": 0.0}
 var _twist := 0.0
 var _recoil := 0.0
 var _kick := 1.0
@@ -77,7 +74,6 @@ func step(pose: CharacterPose, delta: float, distance: float) -> void:
 	_blend("mine", 1.0 if mining and not running and not dead and not aiming else 0.0, k)
 	_blend("aim", 1.0 if aiming and not dead else 0.0, k)
 	_blend("ready", 1.0 if _combat > 0.0 and not aiming and not mining and not dead else 0.0, k)
-	_blend("craft", 1.0 if crafting and not running and not mining and _combat <= 0.0 and not dead else 0.0, k)
 	_twist = lerp_angle(_twist, clampf(aim_twist, -MAX_TWIST, MAX_TWIST) if aiming else 0.0, k)
 	if _w["mine"] > 0.01:
 		_mine_clock += delta
@@ -92,7 +88,7 @@ func step(pose: CharacterPose, delta: float, distance: float) -> void:
 
 	pose.clear()
 	var run: float = _w["run"]
-	var action := clampf(_w["mine"] + _w["aim"] + _w["ready"] + _w["craft"], 0.0, 1.0)
+	var action := clampf(_w["mine"] + _w["aim"] + _w["ready"], 0.0, 1.0)
 	if mech:
 		_mech_idle(pose, 1.0 - run, 1.0 - action)
 		_mech_run(pose, run, 1.0 - action)
@@ -109,8 +105,6 @@ func step(pose: CharacterPose, delta: float, distance: float) -> void:
 			_gun(pose, _w["aim"], true)
 		if _w["ready"] > 0.0:
 			_gun(pose, _w["ready"], false)
-		if _w["craft"] > 0.0:
-			_craft(pose, _w["craft"])
 	if _fall > 0.0:
 		_die(pose, _fall)
 	pose.compute()
@@ -224,16 +218,6 @@ func _gun(pose: CharacterPose, w: float, aimed: bool) -> void:
 	pose.add("forearm_l", Vector3(0.55 + (1.0 - lift) * 0.9, 0.0, 0.0), w)
 	pose.add("spine", Vector3(-0.08 + 0.4 * kick, _twist * 0.75, 0.0), w)
 	pose.add("head", Vector3(0.04, _twist * 0.25, 0.0), w)
-
-
-func _craft(pose: CharacterPose, w: float) -> void:
-	var c := sin(_t * TAU * 1.4)
-	pose.add("upper_arm_r", Vector3(0.5, 0.0, -0.12), w)
-	pose.add("upper_arm_l", Vector3(0.5, 0.0, 0.12), w)
-	pose.add("forearm_r", Vector3(1.3 + 0.14 * c, 0.0, 0.0), w)
-	pose.add("forearm_l", Vector3(1.3 - 0.14 * c, 0.0, 0.0), w)
-	pose.add("spine", Vector3(-0.1, 0.0, 0.0), w)
-	pose.add("head", Vector3(-0.3, 0.06 * sin(_t * 1.3), 0.0), w)
 
 
 ## Falls backwards about the heels, arms flung out, and lies on its back.

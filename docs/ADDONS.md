@@ -317,6 +317,12 @@ dictionaries. Store a `Vector3` as `[x, y, z]`.
   have rebound them.
 - Keep your add-on's own files inside its folder and its data in `api.storage`.
 
+## Licence
+
+Zenith is GPL-3.0, with an exception for add-ons: an add-on that works with Zenith only through
+this API may use any licence you like ([LICENSING.md](../LICENSING.md)). One that copies Zenith's
+own code into it is under the GPL.
+
 ## Testing
 
 Run Zenith from its project with your add-on's folder:

@@ -4,6 +4,7 @@ shader_type spatial;
 render_mode world_vertex_coords;
 
 #include "res://shaders/belt_path.gdshaderinc"
+#include "res://shaders/icon_lod.gdshaderinc"
 
 uniform sampler2D icon : source_color, filter_linear_mipmap_anisotropic;
 
@@ -12,7 +13,7 @@ void vertex() {
 }
 
 void fragment() {
-	vec4 c = texture(icon, UV);
+	vec4 c = icon_texel(icon, UV);
 	ALBEDO = c.rgb;
 	ALPHA = c.a;
 	ALPHA_SCISSOR_THRESHOLD = 0.5;

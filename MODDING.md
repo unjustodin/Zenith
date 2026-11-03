@@ -7,7 +7,7 @@ with other mods, and where modding is going.
 Client add-ons, small GDScript programs that run inside Zenith (a camera of your own, an
 overlay, a window), have an API of their own: [docs/ADDONS.md](docs/ADDONS.md). Models work by
 dropping files in the right place. Anything else means changing the project itself, which is
-open source (MIT): fork it and build on it (the project doesn't take pull requests; see
+open source (GPL-3.0): fork it and build on it (the project doesn't take pull requests; see
 [CONTRIBUTING.md](CONTRIBUTING.md)).
 
 ## What works today

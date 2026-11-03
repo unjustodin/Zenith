@@ -321,7 +321,9 @@ float leaf_cut(vec2 uv, float seed) {
 		}
 	}
 	vec2 q = uv * 2.0 - 1.0;
-	float far_away = clamp((max(fwidth(g.x), fwidth(g.y)) - 0.45) * 2.5, 0.0, 1.0);
+	// Leaves only a pixel or two long shimmer as the camera moves: the disk takes over while a leaf is
+	// still about four pixels long (a cell 0.25 pixels per unit of g, wholly by 0.55).
+	float far_away = clamp((max(fwidth(g.x), fwidth(g.y)) - 0.25) * 3.3, 0.0, 1.0);
 	float disk = 0.78 + 0.18 * hash12(floor(g * 2.0) + off) - length(q);
 	if (mix(cover, disk, far_away) <= 0.0) {
 		discard;

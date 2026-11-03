@@ -47,7 +47,7 @@ Start the client. Its main menu works like Factorio's:
 - **Single player → New game** makes a map with Factorio's map generator and starts it (a
   headless Factorio runs in the background; the client connects by itself).
 - **Single player → Load game** continues one of your saves. Your original save is copied first,
-  never changed.
+  never changed. Saves in folders show as `[folder]`: click one to go in, `[..]` to go back up.
 - **Multiplayer → Host new game** (or **Host saved game**) starts a server friends can join with
   normal Factorio, while you play in 3D.
 - **Multiplayer → Connect to address** joins a bridge that is already running, for example
@@ -121,7 +121,9 @@ Factorio window).
 - **Camera → View when a game starts** (Angled view, Factorio's view or First person) and
   **Projection** (the angled view in perspective or orthographic), **Projection on the map** (the
   remote view you zoom into from the map; F7 switches whichever view you're in) and **Furthest
-  zoom** (how far the wheel zooms out, 60 to 400 tiles; 140 by default).
+  zoom** (how far the wheel zooms out, 60 to 400 tiles; 140 by default) and **Zoom out to the map at**
+  (how far the view you zoomed into from the map zooms out before the map comes back, 80 to 480 tiles;
+  240 by default).
 - **Interface → UI scale**, and Ctrl+= / Ctrl+- / Ctrl+0 while playing.
 - **The bridge's own settings** are in Factorio's Mod settings (Map tab), or Settings → Mod
   settings in a game the menu started: how much it sends per tick, how far moving things are
@@ -129,7 +131,8 @@ Factorio window).
 
 ## Add-ons
 
-Add-ons add to what Zenith does, for example a cinematic camera for filming your base. One is a
+Add-ons add to what Zenith does, for example the [Cinematic camera](https://github.com/unjustodin/Zenith-Cinematic-Camera) for filming your
+base (its keys and modes are in its own guide there). One is a
 folder or a .zip of it (no need to unpack it): put it in Zenith's add-ons folder, `%APPDATA%\Godot\app_userdata\Zenith\addons\` on
 Windows (or an `addons` folder beside `Zenith.exe`), and start Zenith. The **Add-ons** menu (on
 the main menu, in the game menu that Esc opens, and at the bottom of Settings) lists every add-on

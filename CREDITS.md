@@ -1,7 +1,7 @@
 # Credits and licences
 
-Zenith's own code, scripts, shaders, docs and the models it generates are under the MIT
-licence in [LICENSE](LICENSE). A few things in or used by this project aren't ours, and keep
+Zenith's own code, scripts, shaders, docs and the models it generates are under the GNU GPL,
+version 3 ([LICENSE](LICENSE); [LICENSING.md](LICENSING.md) has the add-on exception). A few things in or used by this project aren't ours, and keep
 their own terms:
 
 ## Factorio (Wube Software)
@@ -23,7 +23,7 @@ Wube published 3D-printable models of some Factorio entities on Printables
 **CC BY-NC (non-commercial)**, which is not an open-source licence. Every `.glb` converted from
 those files (belts, undergrounds, chests, furnaces, assembling machine 1, inserters, the small
 pole, walls, the electric mining drill, the character, biters, spitters and the biter spawner)
-keeps Wube's licence, not MIT: each is listed, with its source files, in
+keeps Wube's licence, not the GPL: each is listed, with its source files, in
 [client/assets/models/CREDITS.md](client/assets/models/CREDITS.md). Check each model's page for
 its exact terms before converting it.
 
@@ -34,9 +34,17 @@ by Hurricane and Nuke, publishes its 3D models and textures under **CC BY-NC-SA 
 (https://creativecommons.org/licenses/by-nc-sa/3.0/): non-commercial, share-alike. The models in
 [client/assets/models/fue5/](client/assets/models/fue5/README.md) were converted from its FBX files
 and textures by `tools/models/fue5.py` (scaled to tiles, turned to face north, cut at the ground,
-decimated, their textures baked into one atlas each). They keep that licence, not MIT, and the
+decimated, their textures baked into one atlas each). They keep that licence, not the GPL, and the
 client draws them in place of our own models of the same name. The original files aren't in this
 repository.
+
+## Logo, icon and models by David (Vasillo)
+
+David ([u/Vasillo](https://www.reddit.com/user/Vasillo/) on Reddit) made Zenith's logo and its
+gear icon: the wordmark in the main menu and the application's icon, with the other versions in
+[client/assets/branding/](client/assets/branding/). They're his, used with his permission, and not
+under the GPL (the folder's README). He is also working on Zenith's future 3D
+models.
 
 ## Tools and libraries
 

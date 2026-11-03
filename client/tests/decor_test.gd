@@ -62,6 +62,31 @@ func _ready() -> void:
 	check(d.count() == 102, "the chunk's decoratives are kept: %d" % d.count())
 	check(_instances(d) == 101, "one instance per grass and rock; a decorative without pictures draws nothing: %d" % _instances(d))
 	check(_meshes(d) == 2, "one MultiMesh per decorative in the chunk: %d" % _meshes(d))
+	# Flat ones are blended (cut-outs crawled and sparkled as the view moved), in a fixed order by
+	# Factorio's layer so overlapping ones never swap; standing ones stay cut out.
+	var flat: ShaderMaterial = null
+	var upright: ShaderMaterial = null
+	for inst in _all(d):
+		var m := inst.material_override as ShaderMaterial
+		if m.shader == Decoratives.SHADER_FLAT:
+			flat = m
+		elif m.shader == Decoratives.SHADER:
+			upright = m
+	Decoratives._flat_order = {}
+	Decoratives._index = {"a-decal": {"layer": "decals"}, "b-floor": {"layer": "floor"}, "c-plant": {"layer": "decorative"},
+		"d-standing": {"layer": "object"}}
+	var order := [Decoratives._flat_priority("a-decal"), Decoratives._flat_priority("b-floor"), Decoratives._flat_priority("c-plant")]
+	check(flat != null and upright != null and order[0] < order[1] and order[1] < order[2] and order[2] < 0
+		and order[0] >= Material.RENDER_PRIORITY_MIN,
+		"flat decoratives blended in a fixed order by Factorio's layer, under other see-through things; standing ones cut out (%s)" % [order])
+	Decoratives._flat_order = {}
+	Decoratives._index = {
+		"green-carpet-grass": {"layer": "decals", "box": [-0.5, -0.5, 0.5, 0.5],
+			"pics": [["base/graphics/decorative/test.png", 0, 0, 32, 32, 0.5, 0, 0], ["base/graphics/decorative/test.png", 32, 0, 32, 32, 0.5, 0, 0]]},
+		"small-rock": {"layer": "object", "box": [-0.5, -0.5, 0.5, 0.5],
+			"pics": [["base/graphics/decorative/test.png", 0, 0, 32, 32, 0.5, 0.1, 0]]},
+		"no-pictures": {"layer": "decorative", "box": [-0.5, -0.5, 0.5, 0.5], "pics": [["base/graphics/decorative/missing.png", 0, 0, 8, 8, 1, 0, 0]]},
+	}
 
 	d.set_options(true, 0.5)
 	d.finish_jobs()

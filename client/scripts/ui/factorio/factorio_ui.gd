@@ -1204,6 +1204,25 @@ func _zoom_into_world(at: Vector2) -> void:
 	if remote and rig != null and rig.has_method("in_factorio_view") and not rig.in_factorio_view():
 		rig.toggle_factorio_view()
 		_map_factorio_view = true
+	# Zooming back out goes to the map again (issue #4), at Settings > Camera > Zoom out to the map at
+	# (240 tiles by default; it was four times the opening distance, capped by Furthest zoom at 140).
+	if remote and rig != null and "map_handoff_distance" in rig:
+		var opened := float(rig.get("_distance_goal"))
+		rig.map_handoff_distance = maxf(float(Settings.get_value("camera", "map_zoom_out")), opened * 1.5)
+		if not rig.zoomed_out_to_map.is_connected(_zoom_out_to_map):
+			rig.zoomed_out_to_map.connect(_zoom_out_to_map)
+
+
+func _zoom_out_to_map() -> void:
+	# In a hub the remote view stays round the hub and the map opens over it.
+	if not remote:
+		return
+	var si := viewing_si
+	var at := Vector2(_remote_anchor.position.x, _remote_anchor.position.z) if _remote_anchor != null else Vector2.INF
+	end_remote_view()
+	open_map(true)
+	if at != Vector2.INF:
+		map_view.return_from_world(si, at)
 
 
 ## The character is inside a platform's hub at `at` (ride.gd): the remote view there, for good.
@@ -1241,6 +1260,7 @@ func end_remote_view() -> void:
 	if rig != null:
 		rig.target = player.get("avatar")
 		rig.set("in_remote", false)
+		rig.set("map_handoff_distance", INF)
 		if _map_factorio_view and rig.has_method("leave_factorio_view"):
 			rig.leave_factorio_view()
 	_map_factorio_view = false

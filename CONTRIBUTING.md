@@ -3,8 +3,10 @@
 Zenith is a personal project, and I'm keeping it that way for now: I don't take pull requests or feature
 requests. Bug reports are welcome in the issue tracker.
 
-You're free to fork it. The code is MIT-licensed, so a fork can go wherever you like (Wube's
-printable models and FUE5's models keep their own non-commercial licences: see [CREDITS.md](CREDITS.md)). The rest
+You're free to fork it. The code is under the GPL-3.0: a fork can go wherever you like, as long as
+what you share stays open source under the GPL too ([LICENSING.md](LICENSING.md)). Wube's printable
+models and FUE5's models keep their own non-commercial licences, and the logo and icon are David's,
+so a fork needs its own unless he agrees: see [CREDITS.md](CREDITS.md). The rest
 of this page is for anyone working on a fork.
 
 ## Working on the code
@@ -38,8 +40,8 @@ frames, asking the bridge for lighter updates, and data kept per save.
   shows it, its settings and keys, and why it didn't load if something's wrong.
 - **Sharing it:** zip the folder. Players drop the zip, as it is, into Zenith's `addons` folder
   (beside `Zenith.exe`, or in Zenith's user folder); no unpacking. An add-on lives in its own
-  repository, under your own licence, and needs nothing from this one. The Cinematic camera
-  add-on is the worked example.
+  repository, under your own licence, and needs nothing from this one. The
+  [Cinematic camera](https://github.com/unjustodin/Zenith-Cinematic-Camera) add-on is the worked example.
 - **If the API can't do what you need,** a fork is the way for now; say what was missing in a bug
   report so later versions of the API can cover it.
 

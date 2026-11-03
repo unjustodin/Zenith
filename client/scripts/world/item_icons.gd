@@ -245,16 +245,18 @@ static func _load_icon(path: String, size := 0) -> Texture2D:
 
 static func _find_data_dir() -> String:
 	var home := OS.get_environment("HOME")
-	var libraries: Array[String] = []
-	if OS.get_name() == "Windows":
-		var steam := "C:/Program Files (x86)/Steam"
-		libraries.append(steam)
-		libraries.append_array(_steam_libraries(steam.path_join("steamapps/libraryfolders.vdf")))
-	else:
-		for steam: String in [home.path_join(".steam/steam"), home.path_join(".local/share/Steam"), home.path_join("Library/Application Support/Steam")]:
-			libraries.append(steam)
-			libraries.append_array(_steam_libraries(steam.path_join("steamapps/libraryfolders.vdf")))
 	var candidates: Array[String] = []
+	# The factorio.exe set in Settings → Factorio first: a standalone install anywhere (issue #6:
+	# D:/Factorio_2.1 ran the server but its graphics were never found). Loaded, not preloaded:
+	# paths.gd preloads this script.
+	var paths = load("res://scripts/menu/paths.gd")
+	var exe: String = paths.configured_exe()
+	if exe != "":
+		candidates.append(paths.read_data_dir(exe))
+		candidates.append(exe.get_base_dir().path_join("../data").simplify_path())  # macOS: Contents/MacOS/factorio
+	var libraries: Array[String] = paths._steam_libraries()
+	if OS.get_name() != "Windows":
+		libraries.append(home.path_join("Library/Application Support/Steam"))
 	for lib in libraries:
 		candidates.append(lib.path_join("steamapps/common/Factorio/data"))
 		candidates.append(lib.path_join("steamapps/common/Factorio/factorio.app/Contents/data"))

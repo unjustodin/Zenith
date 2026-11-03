@@ -195,6 +195,11 @@ for _prefix, _k in (("small-", 0.5625), ("medium-", 0.75), ("big-", 1.0)):
                                            "overhang": 17 * _k, "centre": 1.0 * _k}
     SPECS[_prefix + "strafer-pentapod"] = {"size": (4.8 * _k, 4.8 * _k), "budget": MACHINE, "fill": (0.5, 0.5),
                                            "overhang": 11 * _k, "centre": 1.0 * _k}
+# A dead stomper's shell (gleba.py): its collision box (1.8 x 1.45 either side at the tier's
+# stomper_scale, 1.1 x 0.9 / 1.2 / 1.6), the torso squashed to it, lying a little past it and sunk.
+for _prefix, _ss in (("small-", 0.99), ("medium-", 1.32), ("big-", 1.76)):
+    SPECS[_prefix + "stomper-shell"] = {"size": (3.6 * _ss, 2.9 * _ss), "budget": MACHINE, "fill": (0.5, 0.5),
+                                        "overhang": 1.0 * _ss, "centre": 0.6 * _ss, "sink": 0.3 * _ss}
 SPECS["big-wriggler-pentapod"] = {"size": (1.8, 1.8), "budget": LOGISTICS * 2, "fill": (0.5, 0.5), "overhang": 2.5,
                                   "centre": 0.3, "sink": 0.05}
 # Gleba spawners, measured from their pictures (creature_hull.py): the small one's heap is smaller

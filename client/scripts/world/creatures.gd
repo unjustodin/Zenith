@@ -46,6 +46,8 @@ const LOOP_DISTANCE := {
 	"small-biter": 2.0, "medium-biter": 3.0, "big-biter": 4.8, "behemoth-biter": 5.1,
 	"small-spitter": 0.64, "medium-spitter": 0.88, "big-spitter": 1.12, "behemoth-spitter": 1.34,
 	"small-wriggler-pentapod": 2.625, "medium-wriggler-pentapod": 2.625, "big-wriggler-pentapod": 2.625,
+	"small-wriggler-pentapod-premature": 2.625, "medium-wriggler-pentapod-premature": 2.625,
+	"big-wriggler-pentapod-premature": 2.625,
 }
 const DEFAULT_LOOP := 2.0
 ## Loops per second while standing still but awake, so the legs never freeze mid-step.

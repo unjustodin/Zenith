@@ -46,6 +46,12 @@ var max_distance := MAX_DISTANCE
 ## `orthographic` (Settings > Camera, one for the map and one for the normal view).
 var in_remote := false
 var remote_orthographic := true
+## A remote view opened by zooming into the map: zooming out to this distance and once more goes
+## back to the map (issue #4, as Factorio 2.0 does); INF otherwise. factorio_ui.gd sets it.
+var map_handoff_distance := INF
+
+## The wheel zoomed out past map_handoff_distance.
+signal zoomed_out_to_map
 
 ## VR (scripts/vr/vr_session.gd): the headset's camera, which then decides which way is forward
 ## for walking, and the controller's laser as [origin, direction], which then stands in for the
@@ -60,6 +66,9 @@ var _yaw_goal := 45.0
 var _distance_goal := 30.0
 ## The view to go back to when Factorio's view is toggled off; empty when it isn't on.
 var _saved_view := {}
+## The character that was told to hide its body for first person: told again when it ends, even if
+## the camera follows something else by then (the map's remote view swaps `target`).
+var _first_person_body: Node3D
 ## Factorio's view as last snapped to: [yaw, pitch, distance].
 var _factorio_snap: Array = []
 ## A ride's camera (scripts/world/ride.gd): the view to go back to, empty when none is on, and the
@@ -161,10 +170,12 @@ func toggle_factorio_view() -> void:
 	if in_factorio_view():
 		leave_factorio_view()
 		return
+	var was_first_person := first_person
 	if first_person:
 		toggle_first_person()
 	if _saved_view.is_empty():
-		_saved_view = {"yaw": _yaw_goal, "pitch": pitch_degrees, "distance": _distance_goal, "ortho": orthographic}
+		_saved_view = {"yaw": _yaw_goal, "pitch": pitch_degrees, "distance": _distance_goal, "ortho": orthographic,
+			"first_person": was_first_person}
 	# Ground tiles in Factorio are FACTORIO_PX_PER_TILE apart on screen vertically too; through a
 	# camera pitched down by FACTORIO_PITCH a tile spans sin(pitch) of its length.
 	var tiles_high := get_viewport().get_visible_rect().size.y / FACTORIO_PX_PER_TILE
@@ -179,7 +190,10 @@ func toggle_factorio_view() -> void:
 func leave_factorio_view() -> void:
 	if not _saved_view.is_empty():
 		_snap(_saved_view["yaw"], _saved_view["pitch"], _saved_view["distance"], _saved_view["ortho"])
+		var back_to_first_person: bool = _saved_view.get("first_person", false)
 		_saved_view = {}
+		if back_to_first_person and not first_person:
+			toggle_first_person()
 
 
 func _snap(yaw: float, pitch: float, dist: float, ortho: bool) -> void:
@@ -322,8 +336,13 @@ func toggle_first_person() -> void:
 		camera.near = 0.5
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_show_crosshair(first_person)
-	if target != null and target.has_method("set_first_person"):
-		target.set_first_person(first_person)
+	if first_person:
+		if target != null and target.has_method("set_first_person"):
+			_first_person_body = target
+			target.set_first_person(true)
+	elif is_instance_valid(_first_person_body):
+		_first_person_body.set_first_person(false)
+		_first_person_body = null
 
 
 ## Mouse look in first person, from a mouse motion in pixels.
@@ -376,7 +395,12 @@ func tilt(degrees: float) -> void:
 
 
 func zoom(factor: float) -> void:
-	_distance_goal = clampf(_distance_goal * factor, MIN_DISTANCE, max_distance)
+	# The map's remote view zooms out to its own distance (Settings > Camera), past Furthest zoom.
+	var far := map_handoff_distance if map_handoff_distance != INF else max_distance
+	if factor > 1.0 and map_handoff_distance != INF and _distance_goal >= far - 0.01:
+		zoomed_out_to_map.emit()
+		return
+	_distance_goal = clampf(_distance_goal * factor, MIN_DISTANCE, far)
 
 
 ## Where the camera looks, on the ground (tiles).

@@ -1549,6 +1549,27 @@ end
 """
 
 
+def check_triggers(c, hello):
+    """Issue #7: 2.x unlocks red science by a trigger (craft a lab), and a character with no player
+    is left out of the production statistics that set triggers off, so a lab hand-crafted through
+    the bridge never unlocked it. crafting.lua records the character's finished crafts itself."""
+    mod_lua("local c = storage.f3d.puppet local f = c.force "
+            "for _, n in pairs({'steam-power', 'electronics'}) do f.technologies[n].researched = true end "
+            "f.technologies['automation-science-pack'].researched = false "
+            "c.insert({ name = 'iron-gear-wheel', count = 10 }) c.insert({ name = 'electronic-circuit', count = 10 }) "
+            "c.insert({ name = 'transport-belt', count = 4 })")
+    before = mod_lua("local c = storage.f3d.puppet rcon.print(c.force.get_item_production_statistics(c.surface).get_input_count('lab'))")
+    c.send({"t": "craft", "recipe": "lab", "n": 1})
+    c.pump(4.0, every=hello)
+    out = mod_lua("local c = storage.f3d.puppet local f = c.force "
+                  "rcon.print(f.get_item_production_statistics(c.surface).get_input_count('lab') .. ' ' "
+                  ".. tostring(f.technologies['automation-science-pack'].researched) .. ' ' "
+                  ".. tostring(f.recipes['automation-science-pack'].enabled) .. ' ' .. c.get_item_count('lab'))").split()
+    report(len(out) == 4 and int(out[0]) == int(before or 0) + 1 and out[1:3] == ["true", "true"] and int(out[3]) >= 1,
+           "a hand-crafted lab counts in the production statistics and unlocks red science (issue #7)",
+           f"labs counted {before} -> {out[:1]}, researched and recipe {out[1:3]}, labs held {out[3:]}")
+
+
 def check_walk(c, hello):
     """B7: `walk` with an angle. The mod steps each tick in one of the two 8-way directions either side
     of it (puppet.lua angle_step); in the real game the path must follow the line within a few
@@ -4274,7 +4295,7 @@ def parse_args():
     parser.add_argument("--client-port", type=int, default=CLIENT_PORT, help="the port this binds, as the client would")
     parser.add_argument("--rcon-port", type=int, default=rcon.PORT)
     parser.add_argument("--only", choices=["platforms", "planets", "space", "ride", "collectors", "ui", "input", "cliffs", "save", "gear", "planners", "circuits", "build", "info",
-                                           "alerts", "multi", "remnants", "machines", "logic", "vehicles", "hud", "turrets", "weapons", "enemies", "console", "remote", "walk", "states", "mapinfo"], help="run just these checks after the handshake")
+                                           "alerts", "multi", "remnants", "machines", "logic", "vehicles", "hud", "turrets", "weapons", "enemies", "console", "remote", "walk", "states", "mapinfo", "triggers"], help="run just these checks after the handshake")
     args = parser.parse_args()
     FACTORIO_PORT, CLIENT_PORT, rcon.PORT = args.factorio_port, args.client_port, args.rcon_port
     return args
@@ -4305,14 +4326,14 @@ def main():
         print(f"\n{results.count(True)} passed, {results.count(False)} failed")
         sys.exit(0 if all(results) else 1)
 
-    if args.only in ("cliffs", "save", "gear", "build", "alerts", "multi", "remnants", "turrets", "weapons", "enemies", "remote", "walk", "states", "mapinfo"):
+    if args.only in ("cliffs", "save", "gear", "build", "alerts", "multi", "remnants", "turrets", "weapons", "enemies", "remote", "walk", "states", "mapinfo", "triggers"):
         if handshake(c):
             hello = (1.0, {"t": "hello", "v": 1, "sid": c.sid, "w": 1})
             c.pump(1.0, every=hello)
             {"cliffs": check_cliffs, "save": check_save, "gear": check_gear, "build": check_build_tools,
              "alerts": check_alerts, "multi": check_multi, "remnants": check_remnants, "turrets": check_turrets, "weapons": check_weapons,
              "enemies": check_enemies, "remote": check_remote_view, "walk": check_walk, "states": check_states,
-             "mapinfo": check_map_info}[args.only](c, hello)
+             "mapinfo": check_map_info, "triggers": check_triggers}[args.only](c, hello)
             report(not c.invalid, "every message passes tools/protocol.py", str(c.invalid[:3]))
         print(f"\n{results.count(True)} passed, {results.count(False)} failed")
         sys.exit(0 if all(results) else 1)

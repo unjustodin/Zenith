@@ -71,6 +71,15 @@ static func factorio_exe() -> String:
 	return find_factorio_exe()
 
 
+## factorio.exe from --factorio or the setting alone, "" when neither is set (no searching, so
+## ItemIcons can ask while it looks for the data folder).
+static func configured_exe() -> String:
+	var configured := Settings.arg_value("--factorio=")
+	if configured == "":
+		configured = str(Settings.get_value("factorio", "executable"))
+	return _exe_in(configured) if configured.strip_edges() != "" else ""
+
+
 ## Searching only, without the setting (shown in Settings as what "automatic" finds).
 static func find_factorio_exe() -> String:
 	var candidates: Array[String] = []

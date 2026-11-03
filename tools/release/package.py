@@ -25,9 +25,10 @@ PRESETS = {"windows": ("Windows Desktop", "Zenith.exe"), "linux": ("Linux", "Zen
 SERVER_FILES = ["server-settings.json", "run-server.ps1", "run-headless.sh", "download-headless.sh"]
 # The models from Wube's printable release (CC BY-NC) and from FUE5 (CC BY-NC-SA) ship inside the game:
 # their per-model lists and licence terms go beside it, as the licences ask.
-DOCS = [("LICENSE", "LICENSE.txt"), ("CREDITS.md", "CREDITS.md"), ("docs/USER-GUIDE.md", "USER-GUIDE.md"),
+DOCS = [("LICENSE", "LICENSE.txt"), ("LICENSING.md", "LICENSING.md"), ("CREDITS.md", "CREDITS.md"), ("docs/USER-GUIDE.md", "USER-GUIDE.md"),
         ("docs/ADDONS.md", "ADDONS.md"), ("client/assets/models/CREDITS.md", "MODEL-CREDITS.md"),
-        ("client/assets/models/fue5/README.md", "FUE5-MODELS.md")]
+        ("client/assets/models/fue5/README.md", "FUE5-MODELS.md"),
+        ("client/assets/branding/README.md", "LOGO-LICENCE.md")]
 ADDONS_README = """Zenith add-ons go here: each a .zip as you downloaded it (no need to unpack it), or a folder
 with its addon.json (or put them in Zenith's user data folder, which keeps them across updates).
 The Add-ons menu (main menu, Esc menu, Settings) lists them, with a switch, settings and keys for

@@ -3469,6 +3469,7 @@ function F.make_record(type_name, label, data)
 end
 
 -- LuaFlowStatistics: counts by name the harness sets in F.flow[kind] = {name = {in, out}}.
+F.flowed = {}
 F.flow = { item = { ["iron-plate"] = { 120, 30 }, ["iron-gear-wheel"] = { 10, 4 } }, fluid = {}, kill = { ["small-biter"] = { 3, 0 } } }
 local function flow_statistics(kind)
   local counts = F.flow[kind]
@@ -3488,6 +3489,11 @@ local function flow_statistics(kind)
     get_input_count = function(name) return input[name] or 0 end,
     get_output_count = function(name) return output[name] or 0 end,
     get_storage_count = function(name) return storage[name] or 0 end,
+    -- What the mod adds (crafting.lua: the bridge character's hand-crafts), kept in F.flowed.
+    on_flow = function(name, count)
+      assert(type(name) == "string" and type(count) == "number", "on_flow(item, count)")
+      F.flowed[#F.flowed + 1] = { kind, name, count }
+    end,
     get_flow_count = function(p)
       assert(p.name and (p.category == "input" or p.category == "output" or p.category == "storage") and p.precision_index,
         "get_flow_count takes {name, category, precision_index}")

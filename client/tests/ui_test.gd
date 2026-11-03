@@ -40,6 +40,9 @@ const BeltItemsScript := preload("res://scripts/world/belt_items.gd")
 const MapGen := preload("res://scripts/menu/map_gen.gd")
 const MapGeneratorWindow := preload("res://scripts/menu/map_generator_window.gd")
 const ModsWindow := preload("res://scripts/menu/mods_window.gd")
+const FrontEndScript := preload("res://scripts/menu/front_end.gd")
+const CreatureModels := preload("res://scripts/world/creature_models.gd")
+const Paths := preload("res://scripts/menu/paths.gd")
 const ServerLauncher := preload("res://scripts/menu/server_launcher.gd")
 const WorldMirror := preload("res://scripts/world/world.gd")
 const ChunkView := preload("res://scripts/world/chunk_view.gd")
@@ -3670,6 +3673,59 @@ func _menus() -> void:
 		check(ModsWindow._list_states().get("some-mod") == false, "a mod can be turned off")
 	mods.queue_free()
 	Settings.reset_value("factorio", "server_data")
+	await _issue_folders_and_install()
+
+
+## Issue #3: saves in folders, browsed as Factorio's load screen does; issue #6: the Factorio
+## install set in Settings → Factorio is where the graphics come from, wherever it is.
+func _issue_folders_and_install() -> void:
+	var saves := OS.get_user_data_dir().path_join("ui-test-saves")
+	DirAccess.make_dir_recursive_absolute(saves.path_join("Space Age/Older"))
+	_write(saves.path_join("top.zip"), "x")
+	_write(saves.path_join("Space Age/run.zip"), "x")
+	_write(saves.path_join("Space Age/Older/old.zip"), "x")
+	Settings.set_value("factorio", "saves", saves)
+	var fe: Node = FrontEndScript.new()
+	fe._list_worlds()
+	var names := func() -> Array: return fe._saves.filter(func(e: Dictionary) -> bool: return e["source"] == "server").map(func(e: Dictionary) -> String: return ("[%s]" if e.get("folder", false) else "%s") % e["name"])
+	var top: Array = names.call()
+	var folder: Dictionary = fe._saves.filter(func(e: Dictionary) -> bool: return e["name"] == "Space Age")[0]
+	fe._open_worlds_folder(folder)
+	var inside: Array = names.call()
+	var selected_inside: String = str(fe._saves[fe._selected]["name"]) if fe._selected >= 0 else ""
+	fe._open_worlds_folder(fe._saves.filter(func(e: Dictionary) -> bool: return e["name"] == "Older")[0])
+	var deeper: Array = names.call()
+	fe._open_worlds_folder(fe._saves[0])  # [..]
+	var up_once: Array = names.call()
+	fe._open_worlds_folder(fe._saves[0])
+	var at_top: bool = fe._worlds_dir.is_empty()
+	fe.free()
+	check(top.slice(0, 2) == ["[Space Age]", "top"] and inside == ["[..]", "[Older]", "run"] and selected_inside == "run"
+		and deeper == ["[..]", "old"] and up_once == inside and at_top,
+		"issue #3: the load screen shows folders, opens them at any depth and goes back up (%s / %s / %s)" % [top, inside, deeper])
+	Settings.reset_value("factorio", "saves")
+	# A standalone install anywhere (D:/Factorio_2.1 in the report), found from the exe set.
+	var install := OS.get_user_data_dir().path_join("ui-test-factorio")
+	DirAccess.make_dir_recursive_absolute(install.path_join("bin/x64"))
+	DirAccess.make_dir_recursive_absolute(install.path_join("data/base/graphics/icons"))
+	_write(install.path_join("bin/x64/factorio.exe"), "")
+	Settings.set_value("factorio", "executable", install.path_join("bin/x64/factorio.exe"))
+	var found: String = ItemIcons._find_data_dir()
+	var folder_ok: bool = Paths.configured_exe() == install.path_join("bin/x64/factorio.exe")
+	Settings.set_value("factorio", "executable", install)
+	var by_folder: String = ItemIcons._find_data_dir()
+	var w: Node = SettingsWindow.new()
+	add_child(w)
+	await get_tree().process_frame
+	w.open_tab("Factorio")
+	await get_tree().process_frame
+	var graphics := w.find_child("factorio-graphics", true, false) as Label
+	var says: String = graphics.text if graphics != null else ""
+	w.queue_free()
+	Settings.reset_value("factorio", "executable")
+	check(found == install.path_join("data") and by_folder == found and folder_ok and Paths.configured_exe() == ""
+		and says.begins_with("Restart Zenith"),
+		"issue #6: the data folder comes from the factorio.exe (or folder) set in Settings, which says to restart (%s)" % says)
 
 
 func _write(path: String, text: String) -> void:
@@ -4040,6 +4096,19 @@ func _play(hud: Hud, player: Node) -> void:
 	if cancel_button != null:
 		cancel_button.pressed.emit()
 		check(sent_one("research_cancel").get("name") == "electronics", "Cancel research sends it")
+	# Issue #7: a trigger technology (2.x's red science: craft a lab) has no Start research button.
+	var three := [["automation", "a", [], [["automation-science-pack", 1]], 10, 10, 2, ""],
+		["electronics", "b", ["automation"], [["automation-science-pack", 1]], 30, 15, 1, ""],
+		["logistics-2", "c", ["electronics"], [["automation-science-pack", 1], ["logistic-science-pack", 1]], 200, 30, 0, ""]]
+	m.handle({"t": "techs", "part": 1, "parts": 1, "l": three + [["red-science", "d", ["automation"], [], 1, 0, 1, "craft-item"]]})
+	m.handle({"t": "rs", "cur": "", "pr": 0, "q": []})
+	r.select("red-science")
+	await get_tree().process_frame
+	check(_find_button(r, "Start research") == null and _find_button(r, "Add to queue") == null,
+		"a trigger technology can't be started, as in Factorio")
+	m.handle({"t": "techs", "part": 1, "parts": 1, "l": three})
+	m.handle({"t": "rs", "cur": "electronics", "pr": 400, "q": []})
+	await get_tree().process_frame
 	r.select("logistics-2")
 	await get_tree().process_frame
 	start = _find_button(r, "Add to queue")
@@ -6679,6 +6748,15 @@ func _icons(hud: Hud) -> void:
 		and DecorativeLayer.TILE_STEP * DecorativeLayer.TILE_STEPS <= lifts["ground-layer-1"] - lifts["decals"],
 		"flat decoratives lie in Factorio's layer order, steps within a layer never reaching the next")
 	check(BeltItemsScript.LAYERS > 1 and BeltItemsScript.LAYER_STEP > 0.0, "items on belts sit a step apart by id, so overlapping cards don't flicker")
+	# Gleba fights: the premature wrigglers a dying stomper lets out are wrigglers of their tier, not
+	# orange boxes, and stomper shells have models of their own (not a cream box).
+	var premature_ok := true
+	for tier in ["small-", "medium-", "big-"]:
+		var a = CreatureModels.ALIASES.get(tier + "wriggler-pentapod-premature")
+		var b = CreatureModels.ALIASES.get(tier + "wriggler-pentapod")
+		premature_ok = premature_ok and a != null and a == b and CreatureModels.walks(tier + "wriggler-pentapod-premature")
+		premature_ok = premature_ok and FileAccess.file_exists("res://assets/models/%sstomper-shell.glb" % tier)
+	check(premature_ok, "premature wrigglers drawn as their tier's wriggler; stomper shells have models")
 	# Belt items' updates are worked on a worker thread: the same items, buffers and glide as on the
 	# main thread, an item missing from two updates goes, and nothing jumps when an update lands.
 	var layers: Array = []
@@ -6877,6 +6955,30 @@ func _icons(hud: Hud) -> void:
 	ui.end_remote_view()
 	check(dropped and not cam_rig.in_factorio_view() and not cam_rig.orthographic and cam_rig.target == walker,
 		"zooming the map in drops into the world at Factorio's angle, leaving puts the camera back")
+	# Issue #4: zooming back out of that view goes to the map there, at the distance set in Settings >
+	# Camera (past Furthest zoom).
+	var map_out_was = Settings.get_value("camera", "map_zoom_out")
+	Settings.set_value("camera", "map_zoom_out", 320)
+	ui._zoom_into_world(Vector2(40, 12))
+	var handoff: float = cam_rig.map_handoff_distance
+	var map_reached := 0.0
+	var out_steps := 0
+	while ui.remote and out_steps < 200:
+		map_reached = maxf(map_reached, cam_rig._distance_goal)
+		cam_rig.zoom(1.1)
+		out_steps += 1
+	Settings.set_value("camera", "map_zoom_out", map_out_was)
+	var back_on_map: bool = not ui.remote and ui.map_view.is_open() and ui.map_view.centre.distance_to(Vector2(40, 12)) < 0.01 \
+		and is_equal_approx(ui.map_view.zoom, 8.0) and cam_rig.map_handoff_distance == INF
+	ui.open_map(false)
+	ui.remote_view(Vector2(5, 5))  # a remote view not from the map (an alert) zooms out as before
+	for i in 60:
+		cam_rig.zoom(1.1)
+	var alert_stays: bool = ui.remote and is_equal_approx(cam_rig._distance_goal, cam_rig.max_distance)
+	ui.end_remote_view()
+	check(is_equal_approx(handoff, 320.0) and is_equal_approx(map_reached, 320.0) and map_reached > cam_rig.max_distance
+		and out_steps > 1 and out_steps < 200 and back_on_map and alert_stays,
+		"issue #4: the map's remote view zooms out to the setting's distance (%d tiles, past Furthest zoom), then the map comes back at its closest zoom" % int(map_reached))
 	# The projection is a setting (Settings > Camera), no longer the O key; Factorio's view stays
 	# orthographic and leaving it returns to the setting.
 	var ortho_was = Settings.get_value("camera", "orthographic")
@@ -6961,6 +7063,29 @@ func _icons(hud: Hud) -> void:
 	ui.end_remote_view()
 	check(not cam_rig.in_factorio_view() and cam_rig._saved_view.is_empty() and cam_rig.pitch_degrees == 60.0,
 		"leaving the map's remote view goes back to the view before Factorio's, even zoomed in it")
+	# Owner: first person, into the map's remote view and out again left a third-person view with no
+	# character: first person ended while the camera followed the map, so the body never heard.
+	var body_gs := GDScript.new()
+	body_gs.source_code = "extends Node3D\nvar hidden := false\nfunc set_first_person(on: bool) -> void:\n\thidden = on\n"
+	body_gs.reload()
+	var body: Node3D = body_gs.new()
+	cam_holder.add_child(body)
+	cam_rig.target = body
+	viewer.avatar = body
+	if cam_rig.first_person:
+		cam_rig.toggle_first_person()
+	cam_rig.toggle_first_person()
+	var hid_fp: bool = body.hidden
+	ui._zoom_into_world(Vector2(40, 12))
+	var shown_in_map: bool = not body.hidden and not cam_rig.first_person
+	ui.end_remote_view()
+	check(hid_fp and shown_in_map and cam_rig.first_person and body.hidden and cam_rig.target == body,
+		"first person, the map's remote view and back: the body shows meanwhile, then first person again")
+	cam_rig.toggle_first_person()
+	check(not body.hidden, "and leaving first person shows the body")
+	cam_rig.target = walker
+	viewer.avatar = walker
+	body.queue_free()
 	# H8: in a platform's hub (a remote view with no character to go back to) M opens the map.
 	var hub_was: Vector2 = ui.hub_at
 	var remote_was: bool = ui.remote

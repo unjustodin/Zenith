@@ -1,4 +1,11 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.1.1
+Date: 2026-11-02
+  Bugfixes:
+    - Items hand-crafted through Zenith count in the production statistics, so research triggers such as crafting a lab (which unlocks red science) work (issue #7).
+  Info:
+    - Licence changed from MIT to GPL-3.0 (version 0.1.0 stays MIT).
+---------------------------------------------------------------------------------------------------
 Version: 0.1.0
 Date: 2026-10-27
   Features:

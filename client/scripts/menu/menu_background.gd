@@ -11,6 +11,7 @@ const BeltItemLayer := preload("res://scripts/world/belt_items.gd")
 const GroundItemLayer := preload("res://scripts/world/ground_items.gd")
 const InserterArmLayer := preload("res://scripts/world/inserter_arms.gd")
 const Settings := preload("res://scripts/menu/settings.gd")
+const ModelLibrary := preload("res://scripts/world/model_library.gd")
 
 const DATA := "res://data/menu_world.json"
 const LIVE := ["mv", "bi", "ih", "gi"]
@@ -105,6 +106,12 @@ func _factory_center(fallback: Vector2) -> Vector2:
 
 
 func _process(delta: float) -> void:
+	# Models are made on worker threads and a chunk leaves one out until it is ready; world.gd draws
+	# them again only while a game runs, so the menu does it here (its buildings were missing).
+	if ModelLibrary.poll():
+		for c in world.chunks:
+			if world.chunks[c].waiting_models:
+				world._dirty[c] = true
 	world._rebuild_dirty()
 	_time += delta
 	_clock += delta

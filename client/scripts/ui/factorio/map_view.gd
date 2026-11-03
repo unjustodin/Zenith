@@ -436,6 +436,13 @@ func _on_landing_pad(si: int, q: int, at: Vector2, found: bool) -> void:
 		_redraw = true
 
 
+## Back from the remote view the map zoomed into (issue #4): the map on that surface (0 the
+## character's), centred where the view was, at its closest zoom.
+func return_from_world(si: int, at: Vector2) -> void:
+	look_at_on(si, at)
+	zoom = MAX_ZOOM
+
+
 ## The map on another surface (or the character's, 0), centred on `at` (tiles) and zoomed in: an
 ## alert's entity there.
 func look_at_on(si: int, at: Vector2) -> void:

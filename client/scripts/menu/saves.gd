@@ -20,6 +20,34 @@ static func list() -> Array:
 	return out
 
 
+## The folders the load screen starts in, as [source, dir]: the server's saves, then Factorio's own.
+static func roots() -> Array:
+	var out: Array = [["server", Paths.saves_dir()]]
+	var own := Paths.factorio_saves_dir()
+	if own != "":
+		out.append(["factorio", own])
+	return out
+
+
+## One folder of a root as the load screen shows it, as Factorio's does (issue #3): its folders
+## first, by name, each {"folder": true, "path", "name", "source"}, then its saves, newest first.
+static func entries(source: String, dir: String) -> Array:
+	var folders: Array = []
+	if DirAccess.dir_exists_absolute(dir):
+		for sub in DirAccess.get_directories_at(dir):
+			if not sub.begins_with("."):
+				folders.append({"folder": true, "path": dir.path_join(sub), "name": sub, "source": source})
+	var by_name := func(a: Dictionary, b: Dictionary) -> bool:
+		return str(a["name"]).naturalnocasecmp_to(str(b["name"])) < 0
+	folders.sort_custom(by_name)
+	var saves: Array = []
+	_scan(dir, source, saves)
+	var newer := func(a: Dictionary, b: Dictionary) -> bool:
+		return int(a["modified"]) > int(b["modified"])
+	saves.sort_custom(newer)
+	return folders + saves
+
+
 static func _scan(dir: String, source: String, out: Array) -> void:
 	if not DirAccess.dir_exists_absolute(dir):
 		return

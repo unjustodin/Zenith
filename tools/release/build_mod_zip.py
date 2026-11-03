@@ -26,6 +26,8 @@ def main():
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for p in files:
             z.write(p, f"{folder}/{p.relative_to(MOD).as_posix()}")
+        # The GPL travels with every copy.
+        z.write(ROOT / "LICENSE", f"{folder}/LICENSE")
     print(f"wrote {out} ({len(files)} files, {out.stat().st_size // 1024} KB)")
 
 

@@ -1,6 +1,6 @@
 {
   "name": "factorio-3d-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "Zenith Bridge",
   "author": "Zenith",
   "description": "The bridge for Zenith: streams the game over localhost UDP to the Zenith client (a separate program that draws it in 3D) and plays a character for it. Needs Factorio started with --enable-lua-udp <port>; on its own it changes nothing in the game.",

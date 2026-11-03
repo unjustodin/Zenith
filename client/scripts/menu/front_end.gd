@@ -48,6 +48,9 @@ const Controls := preload("res://scripts/player/controls.gd")
 ## Zenith's version, from the project settings (application/config/version, the same as the mod's
 ## info.json: tools/release/package.py checks the two agree).
 static var VERSION := "Zenith %s" % str(ProjectSettings.get_setting("application/config/version", "(development build)"))
+## Zenith's logo, made by David (Vasillo); assets/branding/ has the other versions. Not under the
+## GPL: a fork may delete the folder, and the menu then shows the name instead.
+const LOGO_PATH := "res://assets/branding/logo.png"
 const CREDITS := "Factorio © Wube Software. Its graphics, sounds and fonts are read from your own Factorio install, not shipped with Zenith."
 const CONNECT_TIMEOUT_MSEC := 30000
 ## The world counts as loaded once this many chunks are drawn (or a few seconds after "ready").
@@ -75,6 +78,8 @@ var _settings: Control = null
 var _connect_started := 0
 var _ready_since := 0
 var _saves: Array = []
+## The folder the load screen shows: {} for the top (every root), else {"source", "dir", "root"}.
+var _worlds_dir := {}
 var _selected := -1
 var _exit_after := -1.0
 var _save_after := -1.0
@@ -292,9 +297,31 @@ func _show_main_menu(sub := "") -> void:
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	page.add_child(center)
+	var column := VBoxContainer.new()
+	column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	column.alignment = BoxContainer.ALIGNMENT_CENTER
+	column.add_theme_constant_override("separation", Kit.px(18))
+	center.add_child(column)
+	if ResourceLoader.exists(LOGO_PATH):
+		var logo := TextureRect.new()
+		logo.name = "Logo"
+		logo.texture = load(LOGO_PATH)
+		logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		logo.custom_minimum_size = Kit.pxv(560, 100)
+		logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		column.add_child(logo)
+	else:
+		var name_label := Label.new()
+		name_label.name = "Logo"
+		name_label.text = "ZENITH"
+		name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		name_label.add_theme_font_size_override("font_size", Kit.px(64))
+		column.add_child(name_label)
 	var title := {"": "Main menu", "single": "Single player", "multi": "Multiplayer"}
 	var parts := MenuKit.window(str(title.get(sub, "Main menu")))
-	center.add_child(parts[0])
+	parts[0].size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	column.add_child(parts[0])
 	var box: VBoxContainer = parts[1]
 	var inner := Kit.panel("FShallowFrame")
 	var buttons := VBoxContainer.new()
@@ -341,6 +368,9 @@ func _show_main_menu(sub := "") -> void:
 	var exe := Paths.factorio_exe()
 	var fver := Paths.factorio_version(exe) if exe != "" else ""
 	version.text = VERSION + ("  ·  Factorio %s" % fver if fver != "" else "  ·  Factorio not found (Settings → Factorio)")
+	# The install's graphics and sounds are found once, at start-up: a path set since needs a restart.
+	if fver != "" and Paths.ItemIcons.factorio_data_dir() == "":
+		version.text += "  ·  restart Zenith to load Factorio's graphics"
 	version.anchor_top = 1.0
 	version.anchor_bottom = 1.0
 	version.offset_left = Kit.px(12)
@@ -370,8 +400,8 @@ func _show_main_menu(sub := "") -> void:
 ## right; New game, Delete and the other ways in below; Back and Load at the bottom.
 func _show_worlds(mode := "load") -> void:
 	_worlds_mode = mode
-	_saves = Saves.list()
-	_selected = 0 if not _saves.is_empty() else -1
+	_worlds_dir = {}
+	_list_worlds()
 	var page := MenuKit.overlay(0.0)
 	page.name = "Worlds"
 	page.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -446,6 +476,39 @@ func _show_worlds(mode := "load") -> void:
 	_fill_worlds()
 
 
+## The entries of the folder the load screen shows (_worlds_dir): at the top every root's folders and
+## saves, inside a folder "[..]" and that folder's; the first save selected.
+func _list_worlds() -> void:
+	_saves = []
+	if _worlds_dir.is_empty():
+		for root: Array in Saves.roots():
+			_saves.append_array(Saves.entries(str(root[0]), str(root[1])))
+	else:
+		_saves.append({"up": true, "folder": true, "name": "..", "source": _worlds_dir["source"], "path": str(_worlds_dir["dir"]).get_base_dir()})
+		_saves.append_array(Saves.entries(str(_worlds_dir["source"]), str(_worlds_dir["dir"])))
+	_selected = -1
+	for i in _saves.size():
+		if not _saves[i].get("folder", false):
+			_selected = i
+			break
+
+
+## Into a folder of saves, or back up one ("[..]"; from a root's own folders, back to the top).
+func _open_worlds_folder(entry: Dictionary) -> void:
+	var source := str(entry["source"])
+	var root := ""
+	for r: Array in Saves.roots():
+		if str(r[0]) == source:
+			root = str(r[1])
+	var dir := str(entry["path"])
+	if entry.get("up", false) and dir.simplify_path().length() <= root.simplify_path().length():
+		_worlds_dir = {}
+	else:
+		_worlds_dir = {"source": source, "dir": dir, "root": root}
+	_list_worlds()
+	_fill_worlds()
+
+
 func _fill_worlds() -> void:
 	if _page == null or _page.name != "Worlds":
 		return
@@ -457,10 +520,28 @@ func _fill_worlds() -> void:
 		var s: Dictionary = _saves[i]
 		if s["source"] != last_source:
 			last_source = s["source"]
-			var head := Kit.label("  Server saves (server/saves)" if last_source == "server" else "  Factorio's saves (loaded as a copy)", "FHeading")
+			var where := "  Server saves (server/saves)" if last_source == "server" else "  Factorio's saves (loaded as a copy)"
+			if not _worlds_dir.is_empty():
+				where += "  ›  " + str(_worlds_dir["dir"]).trim_prefix(str(_worlds_dir["root"])).trim_prefix("/")
+			var head := Kit.label(where, "FHeading")
 			head.custom_minimum_size.y = Kit.px(28)
 			head.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+			head.clip_text = true
 			list.add_child(head)
+		if s.get("folder", false):
+			# Folders as Factorio's load screen writes them, in brackets; a click goes in.
+			var f := Button.new()
+			f.name = "Folder-" + str(s["name"]).validate_node_name()
+			f.theme_type_variation = "FListItem"
+			f.focus_mode = Control.FOCUS_NONE
+			f.custom_minimum_size.y = Kit.px(28)
+			f.alignment = HORIZONTAL_ALIGNMENT_LEFT
+			f.clip_text = true
+			f.text = "  [%s]" % s["name"]
+			var entry := s
+			_on(f, func() -> void: _open_worlds_folder(entry))
+			list.add_child(f)
+			continue
 		var b := Button.new()
 		b.theme_type_variation = "FListItemSelected" if i == _selected else "FListItem"
 		b.focus_mode = Control.FOCUS_NONE
@@ -509,7 +590,7 @@ func _fill_details() -> void:
 	var delete: Button = _page.find_child("Delete", true, false)
 	load.disabled = _selected < 0
 	delete.disabled = _selected < 0 or _saves[_selected]["source"] != "server"
-	if _selected < 0:
+	if _selected < 0 or _saves[_selected].get("folder", false):
 		return
 	var s: Dictionary = _saves[_selected]
 	var preview := TextureRect.new()
@@ -552,7 +633,7 @@ func _latest_server_save() -> String:
 
 
 func _load_selected() -> void:
-	if _selected < 0 or _selected >= _saves.size():
+	if _selected < 0 or _selected >= _saves.size() or _saves[_selected].get("folder", false):
 		return
 	var s: Dictionary = _saves[_selected]
 	var path := str(s["path"])
@@ -574,7 +655,8 @@ func _confirm_delete() -> void:
 	_show_confirm("Delete save", "Delete \"%s\"? It goes to the recycle bin." % s["name"], "Delete", func() -> void:
 		if not Saves.delete(str(s["path"])):
 			_show_message("Error", "Couldn't delete %s." % s["path"])
-		_show_worlds(_worlds_mode), true)
+		_list_worlds()
+		_fill_worlds(), true)
 
 
 ## Factorio's map generator; Play creates the map and starts it (hosted when `host` is set).
@@ -710,7 +792,8 @@ func _show_about() -> void:
 		"Godot %s" % Engine.get_version_info().get("string", ""),
 		"",
 		CREDITS,
-		"Zenith's own code is MIT licensed; Wube's printable models keep their CC BY-NC licence (CREDITS.md).",
+		"Zenith is free software under the GPL-3.0 (LICENSING.md); Wube's printable models, FUE5's models and the logo keep their own licences (CREDITS.md).",
+		"Logo and icon by David (Vasillo).",
 	]
 	box.add_child(MenuKit.paragraph("\n".join(lines), 620))
 	var credits_file := Paths.read_data_dir(exe).path_join("credits.txt") if exe != "" else ""

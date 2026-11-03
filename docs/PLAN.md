@@ -150,7 +150,7 @@ findings and polish.
 | Models | A model for every entity in the base game and Space Age | Every family has one; 39 entities use FUE5's textured models; some are still being refined against the sprites ([ASSET-INVENTORY.md](ASSET-INVENTORY.md)) |
 | Scale | Level of detail, shadows fitted to the view, far chunks merged, frame budgets; on the bridge's side a per-tick work budget, update rates and a client that holds the game at 60 UPS | Mostly there: my own big save holds about 60 UPS and walks mostly smoothly; forests and long view distances still cost the GPU most |
 | Add-ons | Programs that add to the client without forking it, through one versioned API | Built (add-on API 1); the cinematic camera add-on is the first |
-| Release | Mod zip for the portal, an exported client with the mod and server scripts beside it | Built; not published yet |
+| Release | Mod zip for the portal, an exported client with the mod and server scripts beside it | Released: 0.1 is out ([ROADMAP.md](ROADMAP.md) has what comes next) |
 
 A side idea that stays open: render the finished models from Factorio's camera into sprite
 sheets, as a 3D-rendered reskin that runs inside Factorio itself (route A above).

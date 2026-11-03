@@ -17,6 +17,7 @@ extends Node3D
 
 const ItemIcons := preload("res://scripts/world/item_icons.gd")
 const SHADER := preload("res://shaders/decorative.gdshader")
+const SHADER_FLAT := preload("res://shaders/decorative_flat.gdshader")
 const INDEX := "res://data/decoratives.json"
 
 const CHUNK := 32
@@ -87,6 +88,7 @@ class BuildJob:
 static var _index := {}
 static var _kind_data := {}
 static var _kinds := {}
+static var _flat_order := {}  # flat decorative -> its rank in the drawing order (_flat_priority)
 ## Worker threads read pictures one at a time (and each only once).
 static var _kind_mutex := Mutex.new()
 
@@ -371,10 +373,13 @@ static func _kind(name: String, data: KindData) -> Kind:
 		kind.name = name
 		kind.upright = data.upright
 		kind.material = ShaderMaterial.new()
-		kind.material.shader = SHADER
+		kind.material.shader = SHADER if kind.upright else SHADER_FLAT
 		kind.material.set_shader_parameter("atlas", ImageTexture.create_from_image(data.atlas))
 		data.atlas = null  # the texture has it now; jobs only read the regions
-		kind.material.set_shader_parameter("upright", kind.upright)
+		if kind.upright:
+			kind.material.set_shader_parameter("upright", true)
+		else:
+			kind.material.render_priority = _flat_priority(name)
 		if kind.upright:
 			var quad := QuadMesh.new()
 			quad.size = Vector2.ONE
@@ -432,9 +437,31 @@ static func _make_kind_data(name: String, entry: Dictionary, images: Array[Image
 			float(image.get_height()) / atlas.get_height(), 0.0))
 		kind.sizes.append(Vector2(image.get_width(), image.get_height()) * pic_scale / PX_PER_TILE)
 		kind.shifts.append(Vector2(float(pic[6]), float(pic[7])))
+	if not kind.upright:
+		atlas.fix_alpha_edges()  # blended (decorative_flat.gdshader): mipmaps without dark rims
 	atlas.generate_mipmaps()
 	kind.atlas = atlas
 	return kind
+
+
+## A flat decorative's place in the fixed drawing order: blended pictures are otherwise sorted by
+## distance, and overlapping ones of two kinds would swap as the camera moves. Factorio's layer
+## first (decals under ground layers under floor under decoratives), then the name, spread over the
+## render priorities under 0, so the flat clutter is drawn before other see-through things (ghosts,
+## item cards). With more kinds than priorities a few neighbours share one.
+static func _flat_priority(name: String) -> int:
+	if _flat_order.is_empty():
+		var flat: Array = []
+		for n: String in index():
+			var entry: Dictionary = index()[n]
+			if str(entry.get("layer", "")) != UPRIGHT_LAYER:
+				flat.append([float(LAYER_LIFT.get(str(entry.get("layer", "")), 0.036)), n])
+		flat.sort()
+		for i in flat.size():
+			_flat_order[flat[i][1]] = i
+	var rank := int(_flat_order.get(name, _flat_order.size()))
+	var slots := Material.RENDER_PRIORITY_MAX - Material.RENDER_PRIORITY_MIN  # under 0: 128 of them
+	return Material.RENDER_PRIORITY_MIN + mini(rank * (slots / 2) / maxi(_flat_order.size(), 1), slots / 2 - 1)
 
 
 ## [file, x, y, width, height, scale, shift x, shift y] -> that region of the file, or null.

@@ -100,6 +100,7 @@ const DEFAULTS := {
 		"orthographic": false,  # the angled view's projection; Factorio's view (F6) is always orthographic
 		"map_orthographic": true,  # the remote view's, from the map (F7 switches the view in use)
 		"max_zoom": 140,  # how far the wheel zooms out, in tiles from the focus
+		"map_zoom_out": 240,  # the map's remote view: how far out before the map comes back (tiles)
 	},
 	"factorio": {
 		"executable": "",  # factorio.exe or the install folder; "" finds it

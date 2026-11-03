@@ -227,7 +227,7 @@ def shoot(name, args):
         aim = aim_for(name)
         if fly:
             aim = fly + (aim if aim is not None else 0.3)
-        cmd = [GODOT, "--path", os.path.join(REPO, "client"), "--resolution", "1600x1000", "--",
+        cmd = [GODOT, "--audio-driver", "Dummy", "--path", os.path.join(REPO, "client"), "--resolution", "1600x1000", "--",
                "--factorio-port=%d" % args.port, "--port=%d" % (args.port + 1), "--borderless", "--clean-shot",
                "--review-shots=%s@%g" % (out, args.wait), "--review-box=%g,%g,%g" % (w, d, h),
                "--review-views=" + ",".join(views)] + (["--review-aim=%g" % aim] if aim is not None else []) + args.client_arg

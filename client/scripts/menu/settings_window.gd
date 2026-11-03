@@ -607,6 +607,7 @@ func _camera() -> void:
 	_dropdown(grid, "Projection", "camera", "orthographic", [["Perspective", false], ["Orthographic", true]], "for the angled view; Factorio's view (F6) is always orthographic; F7 switches")
 	_dropdown(grid, "Projection on the map", "camera", "map_orthographic", [["Perspective", false], ["Orthographic", true]], "the remote view, zoomed in from the map; F7 there switches it")
 	_slider(grid, "Furthest zoom", "camera", "max_zoom", 60.0, 400.0, 10.0, func(v: float) -> String: return "%d tiles" % int(v), false, false, "the default is 140; far out, more of the world must be drawn")
+	_slider(grid, "Zoom out to the map at", "camera", "map_zoom_out", 80.0, 480.0, 10.0, func(v: float) -> String: return "%d tiles" % int(v), false, false, "the view zoomed in from the map goes back to the map when zoomed out this far; the default is 240")
 	_slider(grid, "Mouse sensitivity", "camera", "look_sensitivity", 0.25, 3.0, 0.05, func(v: float) -> String: return "%.2f×" % v)
 	_check(grid, "Invert mouse look", "camera", "invert_y", "first person and middle-drag tilt")
 
@@ -623,6 +624,27 @@ func _factorio() -> void:
 	var status := Kit.label(("Using " + in_use) if ok else "Factorio not found: set the path above")
 	status.add_theme_color_override("font_color", Kit.DISABLED_TEXT if ok else Kit.RED_TEXT)
 	_row(grid, "", status)
+	var graphics := Kit.label("")
+	graphics.name = "factorio-graphics"
+	_row(grid, "", graphics)
+	# The graphics and sounds come from the data folder found at start-up (ItemIcons); a path
+	# typed here takes effect after a restart, so say so as soon as it is entered.
+	var show := func() -> void:
+		var loaded := Paths.ItemIcons.factorio_data_dir()
+		var exe_now := Paths.factorio_exe()
+		var wanted := Paths.read_data_dir(exe_now) if exe_now != "" else ""
+		if loaded != "" and (wanted == "" or wanted == loaded or not DirAccess.dir_exists_absolute(wanted)):
+			graphics.text = "Graphics and sounds from " + loaded
+			graphics.add_theme_color_override("font_color", Kit.DISABLED_TEXT)
+		elif wanted != "" and DirAccess.dir_exists_absolute(wanted.path_join("base/graphics")):
+			graphics.text = "Restart Zenith to load the graphics and sounds from " + wanted
+			graphics.add_theme_color_override("font_color", Kit.RED_TEXT)
+		else:
+			graphics.text = "Factorio's graphics not found: set factorio.exe above"
+			graphics.add_theme_color_override("font_color", Kit.RED_TEXT)
+	show.call()
+	exe.text_submitted.connect(func(_t: String) -> void: show.call())
+	exe.focus_exited.connect(show)
 	var data := MenuKit.textbox(str(Settings.get_value("factorio", "server_data")), Paths.repo_dir().path_join("server/data"))
 	data.custom_minimum_size.x = Kit.px(420)
 	_on_text(data, "factorio", "server_data")

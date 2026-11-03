@@ -1,5 +1,7 @@
 # Zenith
 
+<p align="center"><img src="client/assets/branding/logo.png" alt="Zenith" width="640"></p>
+
 Play your real Factorio game in 3D, with an angled camera close to your
 character and a 3D model for every entity.
 
@@ -19,7 +21,8 @@ Get the latest release from the [Releases page](../../releases/latest):
   The bridge mod and the server scripts come with it.
 - **factorio-3d-bridge_<version>.zip**: the bridge mod on its own, for a server you run yourself.
 - **cinematic-camera_<version>.zip**: an optional camera add-on (free camera, tracking shots,
-  timelapses, recording). Drop the zip, as it is, into Zenith's `addons` folder.
+  timelapses, recording). Drop the zip, as it is, into Zenith's `addons` folder. Its source and
+  guide: [Zenith-Cinematic-Camera](https://github.com/unjustodin/Zenith-Cinematic-Camera).
 
 ## What works today
 
@@ -57,8 +60,9 @@ This is an early release, and it still has rough edges:
   still cost the graphics card a lot.
 - FUE5's models follow older Factorio designs in places, and a few of their moving parts aren't
   back yet.
-- The models will keep improving: I'm working with 3D modellers to refine them a few at a time,
-  worst first, and each release ships the ones finished since the last.
+- The models will keep improving: I'm working with 3D modellers (David, who also made Zenith's
+  logo, among them) to refine them a few at a time, worst first, and each release ships the ones
+  finished since the last.
   [docs/MODELLERS.md](docs/MODELLERS.md) is the guide for anyone making them.
 - Single-player "hybrid" mode, where the 3D client attaches to a normal Factorio window, has
   been played once, side by side, but not tried much yet.
@@ -118,7 +122,7 @@ Hurricane and Nuke, converted to Zenith's scale and kept under their licence.
 
 ## Where it's going
 
-**Open source, one maintainer.** The code is MIT-licensed and you're welcome to fork it, but
+**Open source, one maintainer.** The code is GPL-3.0 and you're welcome to fork it, but
 Zenith stays a personal project: I don't take pull requests or feature requests. Bug reports are
 welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has notes for working on a fork; you don't need
 Factorio for most client work, since a mock server plays a fake game.
@@ -129,7 +133,8 @@ Factorio for most client work, since a mock server plays a fake game.
   Models may bring their own textures.
 - Add-ons: small GDScript programs in a folder of their own that add to the client without
   forking it, through one versioned API (the camera, keys, windows, the world read-only, events).
-  The first is a cinematic camera for filming (free camera, timelapses, tracking shots, paths).
+  The first is the [Cinematic camera](https://github.com/unjustodin/Zenith-Cinematic-Camera) for filming (free camera, timelapses, tracking
+  shots, paths, recording).
   [docs/ADDONS.md](docs/ADDONS.md) is for add-on authors.
 - The menu's Mods window runs other Factorio mods on the server. Their entities appear as boxes
   sized and coloured from the game until someone models them. Nobody has tried a big overhaul
@@ -138,8 +143,9 @@ Factorio for most client work, since a mock server plays a fake game.
 Next for modding: model packs for other mods, their icons, and more hooks as add-ons need them.
 [MODDING.md](MODDING.md) covers what works today, how other mods behave, and what's planned.
 
-Also planned: smoother play in forests and at long view distances, and the last models that
-still differ from their sprites.
+**Roadmap.** Releases go by milestone: 0.2 stability, 0.3 performance, 0.4 UI polish, 0.5 models,
+0.6 Space Age polish, 0.7 add-ons and modding, 0.8 feature complete, 0.9 final touch-ups and 1.0
+the full release. [docs/ROADMAP.md](docs/ROADMAP.md) says what each one covers.
 
 ## Docs
 
@@ -147,6 +153,7 @@ still differ from their sprites.
 - [docs/RUNNING.md](docs/RUNNING.md): setup, controls, troubleshooting
 - [ARCHITECTURE.md](ARCHITECTURE.md): how the pieces fit together, for anyone reading the code
 - [docs/PROTOCOL.md](docs/PROTOCOL.md): messages between the mod and the client
+- [docs/ROADMAP.md](docs/ROADMAP.md): the milestones to 1.0 and how versions are numbered
 - [docs/PLAN.md](docs/PLAN.md): the approach, where each part stands, the art pipeline and risks
 - [docs/ASSET-INVENTORY.md](docs/ASSET-INVENTORY.md): every entity's 3D model, family by family
 - [CONTRIBUTING.md](CONTRIBUTING.md): no pull requests; notes for working on a fork
@@ -164,10 +171,12 @@ docs/                     guides, protocol, plan, asset inventory
 
 ## Licence
 
-The code is MIT-licensed ([LICENSE](LICENSE)). You need your own copy of Factorio: the client
+The code is free software under the GNU GPL, version 3 ([LICENSE](LICENSE)); add-ons may use any
+licence ([LICENSING.md](LICENSING.md)). Version 0.1.0 was MIT and stays so. You need your own copy of Factorio: the client
 reads Factorio's graphics, sounds and fonts from your install at runtime, and none of Wube's
 assets are in this repository. Models converted from Wube's printable release keep Wube's
-non-commercial licence, and those from FUE5 keep theirs (CC BY-NC-SA 3.0); see
+non-commercial licence, those from FUE5 keep theirs (CC BY-NC-SA 3.0), and the logo and icon are
+David's; see
 [CREDITS.md](CREDITS.md).
 
 This is an unofficial fan project. "Factorio" is a trademark of Wube Software; this project is

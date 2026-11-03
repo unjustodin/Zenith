@@ -46,6 +46,11 @@ const ALIASES := {
 	"small-wriggler-pentapod": ["big-wriggler-pentapod", 0.6, Color(0.258, 0.247, 0.064)],
 	"medium-wriggler-pentapod": ["big-wriggler-pentapod", 0.8, Color(0.374, 0.219, 0.071)],
 	"big-wriggler-pentapod": ["big-wriggler-pentapod", 1.0, Color(0.315, 0.143, 0.097)],
+	# The premature ones a dying stomper or strafer lets out: the same pictures, scale and tints in
+	# Factorio (make_wriggler), only losing health over time. Without these they were orange boxes.
+	"small-wriggler-pentapod-premature": ["big-wriggler-pentapod", 0.6, Color(0.258, 0.247, 0.064)],
+	"medium-wriggler-pentapod-premature": ["big-wriggler-pentapod", 0.8, Color(0.374, 0.219, 0.071)],
+	"big-wriggler-pentapod-premature": ["big-wriggler-pentapod", 1.0, Color(0.315, 0.143, 0.097)],
 	# Factorio draws the small Gleba spawner's corpse with the big one's picture at a third of
 	# its scale (0.3 against 0.9).
 	"gleba-spawner-small-corpse": ["gleba-spawner-corpse", 1.0 / 3.0, null],

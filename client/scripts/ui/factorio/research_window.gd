@@ -809,7 +809,9 @@ func _refresh_details() -> void:
 		var cancel := _dialog_button("Cancel research" if place == 1 else "Remove from queue", "FRedButton")
 		cancel.pressed.connect(func() -> void: model.cancel_research(selected))
 		buttons.add_child(cancel)
-	if state != 2 and place == 0:
+	# A trigger technology unlocks by doing its task, never in labs: Factorio shows no button for it
+	# (the bridge refused one with "Can't research ... yet", issue #7).
+	if state != 2 and place == 0 and str(info.get("trigger", "")) == "":
 		var start := _dialog_button("Start research" if model.research == "" else "Add to queue", "")
 		start.disabled = state == 0
 		if state == 0:

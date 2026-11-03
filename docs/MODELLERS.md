@@ -113,7 +113,7 @@ in: the old one stays in the project's history.
 
 ## Licence
 
-Zenith is open source (MIT). Before you send models, agree with the maintainer how they're
-licensed: under MIT with the rest, or under a licence of your own in a folder of their own with a
+Zenith is open source (GPL-3.0). Before you send models, agree with the maintainer how they're
+licensed: under the GPL with the rest, or under a licence of your own in a folder of their own with a
 README and a credit, as FUE5's models are (`client/assets/models/fue5/`, CC BY-NC-SA 3.0).
 Everyone credited is listed in [CREDITS.md](../CREDITS.md).

@@ -73,7 +73,7 @@ var _last := Vector3.ZERO
 var _has_state := false
 ## Where the character is shooting (world position), or null: set by combat.gd.
 var aim_target = null
-## --anim-pose=<run|idle|mine|aim|ready|runaim|runready|craft|dead>: hold one animation.
+## --anim-pose=<run|idle|mine|aim|ready|runaim|runready|dead>: hold one animation.
 var _demo := ""
 ## The item in the armour slot (set_armor), the look drawn for it, and whether that is the mech's.
 var armor := ""
@@ -487,7 +487,6 @@ func _animate(delta: float) -> void:
 	_anim.mining = mining >= 0
 	_anim.firing = firing
 	_anim.aiming = firing and aim_target != null
-	_anim.crafting = craft_queue > 0
 	_anim.dead = _has_state and health <= 0
 	_anim.aim_twist = 0.0
 	if aim_target != null:
@@ -533,6 +532,5 @@ func _demo_state(delta: float) -> float:
 	_anim.aiming = _demo in ["aim", "runaim"]
 	_anim.firing = _anim.aiming or (_demo in ["ready", "runready"] and Time.get_ticks_msec() < 2000)
 	_anim.aim_twist = 0.6 if _demo == "runaim" else 0.0
-	_anim.crafting = _demo == "craft"
 	_anim.dead = _demo == "dead"
 	return DEMO_SPEED * delta if _anim.running else 0.0

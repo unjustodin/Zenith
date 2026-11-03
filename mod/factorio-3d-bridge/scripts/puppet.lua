@@ -515,6 +515,8 @@ function M.craft(cmd)
     return message("Recipe not available: " .. name)
   end
   local count = math.max(1, math.min(100, math.floor(tonumber(cmd.n) or 1)))
+  -- The queue grows here, not by crafting: crafting.lua looks at it afresh (see count_crafts).
+  storage.f3d.craft_seen = nil
   if c.begin_crafting({ recipe = name, count = count, silent = true }) == 0 then
     message("Missing ingredients for " .. name)
   end
