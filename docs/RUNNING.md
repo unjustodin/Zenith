@@ -48,17 +48,22 @@ made by `tools/record_menu_world.py`):
     server isn't possible: the bridge only talks to a client on the same computer.
 - **Settings**: as in Factorio, a list of pages (Graphics, Controls, Sounds, Interface, Other, Mod settings, then ours: Camera, Factorio install), each opening alone with Back and Confirm; every option is wired to what it changes:
   - **Graphics**: a **Preset** (Low, Medium, High, Ultra, or Custom once anything differs; it sets
-    shadows, SSAO, level of detail, the view, entity, belt and decorative distances, decorative
+    shadows, SSAO (off in every preset), level of detail, the view, entity, belt and decorative distances, decorative
     density and clouds together; High is the defaults) and **For this PC** (Recommended: the preset
     this PC should hold at a steady 60 UPS and 60 FPS, from its CPU threads and graphics card; in a
     game it measures six seconds first; it also turns on the two belt and UPS options below); full
     screen (windowed, borderless, exclusive), resolution, preferred screen, minimize on focus loss,
     VSync, FPS limit, game render scaling (50% to 200%), view distance (2 to 20 chunks round the
     camera, default 10), entity distance (32 to 256 tiles, default 192; the server's "Max
-    live-update radius" caps it), belt items in full (8 to 96 tiles, default 24), belt items far
-    away (one icon per lane, 0 off to 640 tiles, default 160), smooth belt items (on: belt items
+    live-update radius" caps it), belt item distance (0 off to 640 tiles, default 160: items on
+    belts drawn that far, moving near the character and as icons of what each lane carries past
+    that), belt updates (1,000 to 24,000 or Unlimited, default 6,000: the most items, and a little
+    for each lane, the server reads an update, from the character outwards; items move as far out
+    as that reaches, and the icons take over there; Unlimited moves every item within the belt
+    item distance), smooth belt items (on: belt items
     read in one tick every update, so they follow curves; off: read a little each tick, lighter
-    for a busy server), hold the game at 60 UPS (on; see Troubleshooting), smoke and particles,
+    for a busy server), hold the game at 60 UPS (on; see Troubleshooting), shadow distance (Automatic, the Shadows
+    quality's 80 to 200 tiles, or 60 to 400 tiles from the camera), smoke and particles,
     items on belts (3D models or icons), clouds, decoratives, decorative density and distance (64
     to 320 tiles, default 192), item icons, model look (each part in Factorio's colours, or
     Factorio's sprite projected on). **Advanced:** anti-aliasing (FXAA, TAA, MSAA), shadows (off,
@@ -73,7 +78,7 @@ made by `tools/record_menu_world.py`):
     merged materials (off: each model drawn as one surface with one material, fewer draws and
     less render CPU for a little more GPU time; after a restart; `-- --merged-materials` or
     `--no-merged-materials` override it; Recommended turns it on for a big desktop GPU whose frames
-    the CPU holds up, the presets leave it), SSAO, render on a separate thread (off: Godot's experimental mode, after a restart).
+    the CPU holds up, the presets leave it), Ambient occlusion (WIP, high GPU cost; off by default, and turned off once in settings saved before), render on a separate thread (off: Godot's experimental mode, after a restart).
     **Accessibility:** brightness, contrast, saturation and Factorio's colour filters
     (protanopia, deuteranopia, tritanopia and their corrections, over the whole window).
   - **Sound**: master, game effects and its parts (walking, environment = machines and vehicles,
@@ -83,8 +88,7 @@ made by `tools/record_menu_world.py`):
     Shift / Ctrl / Alt; right click clears, clashing bindings are red; mouse and fixed keys are
     listed greyed. `client/scripts/menu/controls_info.gd` says where an action goes.
   - **Interface**: under Factorio's headings: show minimap, control hints (F1; the help panel is off
-    by default and hides while a window is open), fade tall entities in the way (the shortcut bar's
-    tall-entities toggle), Alt-mode, smart belt building, lock belt building to a straight line, UI scale, tooltip delay, the entity tooltip,
+    by default and hides while a window is open), Alt-mode and its inserter, pump and machine arrows (Factorio's defaults: inserters off), smart belt building, lock belt building to a straight line, UI scale, tooltip delay, the entity tooltip,
     chat message delay; then the client's own: shortcut bar, research, alerts, debug line (F4), the
     minimap's size, zoom and tags, and the map view's switches.
   - **Other**: the server's autosave interval and slots and verbose logging (written into the
@@ -167,13 +171,28 @@ to the menu (saving and stopping the server) and quit. `--factorio=<exe>`, `--se
 
 ### The download
 
-`python3 tools/release/package.py` (`--platform windows|linux|all`) exports the client with
-Godot and writes `dist/Zenith-<version>-<platform>.zip`. It needs Godot's export templates for the
-editor's version. The zip holds one folder: `Zenith.exe` (Linux: `Zenith.x86_64`), the bridge mod
+`python3 tools/release/package.py` (`--platform windows|linux|linux-arm64|windows-arm64|macos`, or
+`supported`, `unsupported`, `all`) exports the client with Godot and writes
+`dist/Zenith-<version>-<platform>.zip`. It needs Godot's export templates for the editor's version.
+The zip holds one folder: `Zenith.exe` (Linux: `Zenith.x86_64`, marked executable), the bridge mod
 in `mod/factorio-3d-bridge`, the server scripts in `server/`, the licence, credits, this project's
 player's guide and `START HERE.txt`. The exported client finds `mod/` and `server/` next to its own
-executable, so its servers keep their data in `server/data` and saves in `server/saves` there.
-The Linux build has not been run yet. `python3 tools/release/build_mod_zip.py` builds just the mod
+executable (on macOS next to `Zenith.app`), so its servers keep their data in `server/data` and
+saves in `server/saves` there. Windows and Linux are the supported downloads; the Linux build has
+not been run yet.
+
+**Unsupported downloads (owner's label):** `linux-arm64` (issue #8), `windows-arm64` and `macos`
+are built the same way, never run by anyone, and named `...-unsupported.zip` with an
+`UNSUPPORTED.txt` inside saying so. Linux ARM64 (`Zenith.arm64`, textures packed for desktop graphics
+only, as ARM64 desktops' GPUs read them; a Raspberry Pi's can't): Factorio has no Linux ARM64 build, so it has to run under an x86-64 emulator such as
+Box64 or FEX-Emu, with Settings -> Factorio install pointing at it. Windows ARM64: Zenith runs
+natively, Factorio's x64 build through Windows' emulation. macOS: a universal `Zenith.app` (Apple
+Silicon and Intel; package.py imports the textures for ARM too for that export alone and puts the
+project back after), exported on Windows with only an ad-hoc signature and no notarization, so macOS
+asks to be told to open it (right-click > Open, or `xattr -dr com.apple.quarantine Zenith.app`);
+Factorio's own macOS build is found in Steam or /Applications.
+
+`python3 tools/release/build_mod_zip.py` builds just the mod
 (`dist/factorio-3d-bridge_<version>.zip`) for Factorio's own mods folder.
 
 ## Quick start without Factorio (mock server)
@@ -332,7 +351,12 @@ second by message type and a call-by-call breakdown of reading belt items. CI's 
 `--big --measure` against `tools/busy_budget.json` and fails when the bridge costs more than
 twice the budget. On CI's runners the bridge costs about 6 ms per tick with 3,700 belt items in
 view, nearly all of it `belt_items`; the game keeps 60 UPS. On a laptop with `--big` (about 25,000
-entities) and the windowed client connected it costs about 15 ms a tick. If a module is expensive, the "Belt item, ground item and inserter radius" and "update interval"
+entities) and the windowed client connected it costs about 15 ms a tick. For a client that says
+`bl` in its hello (Zenith does; `busy_base.py --measure`'s own client doesn't), a belt lane whose
+item count and front and back items haven't moved isn't read or sent again: on the owner's save
+at its busiest belts that took `belt_items` from 12-15 to about 5 ms a tick. (A full belt that
+flows moves whole item gaps between some checks and would look unchanged, so every other update
+is read a tick early, and a check that can't tell reads the lane in full.) If a module is expensive, the "Belt item, ground item and inserter radius" and "update interval"
 settings below are the first things to turn down.
 
 Two things keep the bridge from making a slow tick. **The work budget** (`scripts/budget.lua`):
@@ -393,7 +417,7 @@ puts back what it borrowed. On a server the same command answers over RCON
 | Input | Action |
 |---|---|
 | WASD / arrows (or a gamepad's left stick) | Walk, relative to the camera, at any angle (the bridge steers Factorio's 8-way character to follow it) |
-| Right mouse (hold) | Mine what's under the cursor |
+| Right mouse (hold) | Mine what's under the cursor; a train, wagon, car, tank or spidertron under it first (issue #10: not the rail beneath), with what is inside it |
 | Enter | Get into the nearest vehicle (car, tank, train, spidertron) or out of it |
 | Spidertron remote (shortcut bar) | Drag: select spidertrons · Shift+drag: add · right-drag: remove · click: send them there · Shift+click: queue a waypoint |
 | WASD in a vehicle | W accelerate, S reverse, A/D steer (relative to the vehicle) |
@@ -401,7 +425,7 @@ puts back what it borrowed. On a server the same command answers over RCON
 | Space (hold) | Shoot at enemies near the character (the game picks the target) |
 | C (hold) | Shoot at the cursor |
 | Tab | Switch to the next gun (or click a gun in the weapon slots left of the quickbar) |
-| E | Open the character window (inventory and armour/weapons/ammo on the left, hand-crafting on the right); over a building with a screen, open that instead. With any window open, E closes it |
+| E | Open the character window (inventory and armour/weapons/ammo on the left, hand-crafting on the right), whatever is under the mouse. With any window open, E closes it |
 | Esc | Close the open window, machine screen, map view, chooser or remote view; with none open, the Game menu (Resume, Load game, Save game, Save as, Settings, Exit; Players when others play too) |
 | T | The technology screen: the research in progress and queue, the selected technology (cost, time, prerequisites) with Start research / Add to queue / Cancel, and the tree on the right. T, E, Esc or × closes it |
 | M | The map view: the charted map over the whole window (north up) with your character's arrow, the map tags and trains. Drag (left or middle mouse) or WASD/arrows move it (Shift: faster), the wheel zooms about the mouse. Right click: on a tag, edit or delete it; on a ghost, remove it; elsewhere, create a tag there (icon, name, Confirm). Double click also creates or edits a tag. M or Esc closes it (Esc closes the tag dialog first). The game keeps running underneath, and the character doesn't walk while it is open |
@@ -424,14 +448,14 @@ puts back what it borrowed. On a server the same command answers over RCON
 | Holding rails | Click a rail end to start the rail planner there: the path of straight and curved rails to the cursor shows, click (or drag from the end) builds it and carries on from its end; ghosts where your rails run out. Alt+R (while holding rails; otherwise it gives red wire): rail layer (a ramp up, elevated rails with supports). Right click lets go |
 | Holding grenades, cliff explosives, capsules | The throw range and blast show; left click throws at the cursor (hold to keep throwing). Fish heal you |
 | R / Shift+R | Rotate the held item (rails by 45°), or the hovered entity. Building the same belt over a belt turns it; a faster belt (or anything that fast-replaces) replaces it |
-| E, or left mouse with nothing held | Open the hovered building's screen (chests, assemblers, furnaces, labs, drills, boilers...) beside your inventory: its name, status (Working, No ingredients, No fuel, No power...), energy, slots and fluid boxes. E, Esc or its × closes it |
+| Left mouse with nothing held | Open the hovered building's screen (chests, assemblers, furnaces, labs, drills, boilers...) beside your inventory: its name, status (Working, No ingredients, No fuel, No power...), energy, slots and fluid boxes. E, Esc or its × closes it |
 | Recipe slot in an assembler's screen | Click to pick its recipe from the grid below; right click clears it. Items it was holding come back to you |
 | Q | Put the held item (the cursor stack) away; with nothing held over an entity, the pipette: hold its item, turned the same way (a ghost cursor when you have none) |
 | Z (hold) | Drop one of the held item: into the machine or chest under the mouse, onto a belt, or on the ground |
 | Shift+left click | Holding an item: build a ghost of it for robots. Holding nothing: paste the settings copied with Shift+right click (recipe, filters, requests, combinator settings) |
 | Ctrl+left / Ctrl+right click an entity | Fast transfer: the held stack (half) into it, or with nothing held its output (half) into your inventory |
 | H / V | Flip the item being built, or the entity under the mouse (machines with fluid boxes) |
-| Alt | Alt-mode: recipe and filter icons over machines (kept between games); it toggles when Alt is let go, unless Alt was held for an Alt+click |
+| Alt | Alt-mode: recipe and filter icons over every machine in view (they come with the buildings, issue #9), Factorio's fluid arrows on machines and pumps and a recycler's output arrow, inserters' arrows when chosen in Settings → Interface (kept between games); it toggles when Alt is let go, unless Alt was held for an Alt+click |
 | Alt+click | Factoriopedia's page of the thing under the mouse (in the world, or a slot or technology in a window) |
 | F2 | Factoriopedia |
 | L | Logistic networks: every network of the force, its robots and items |
@@ -773,8 +797,8 @@ the server console or RCON, for example `/c settings.global["f3d-chunks-per-tick
   and view distances go below your settings (floors 64 tiles, 8, 32, 5 chunks), then a 45 FPS cap; it gives a step back after 30 s at 60. It also keeps
   the bridge's work budget to the room the game has, so a big request doesn't make a slow tick.
   Your settings stay as they are; the F4 line says what it holds back. Otherwise `/f3d-profile`, then `/f3d-status`, shows which module costs most: lower "Belt
-  item, ground item and inserter radius", or the client's "Belt items in full", "Belt items far
-  away" and "Entity distance". `python tools/ups_probe.py --port <rcon> --seconds 30 --profile`
+  item, ground item and inserter radius", or the client's "Belt updates", "Belt item distance"
+  and "Entity distance". `python tools/ups_probe.py --port <rcon> --seconds 30 --profile`
   measures the server's UPS and the bridge's cost; `-- --ups-probe=out.json[@walk]` lowers each
   of the client's knobs in turn and prints the UPS each buys (`@governed=<s>` logs the governor).
 - **No icons, flat-coloured ground, no sound**: the client didn't find your Factorio install.
@@ -785,10 +809,10 @@ the server console or RCON, for example `/c settings.global["f3d-chunks-per-tick
   rest. Hybrid mode has only been played once, so a server (Single player → New game or Load
   game) is the safer choice.
 - **Low frame rate on a busy base or in a forest**: Settings → Graphics → Preset sets shadows,
-  ambient occlusion, level of detail, the distances and clouds together (High is the defaults;
-  Medium turns ambient occlusion off, Low also halves the shadow detail and the distances). Most of
-  the GPU's time in a dense view goes to ambient occlusion (about 3 ms a frame on my own base
-  at High), trees' leaves and shadows (about 1.5 ms since they are fitted to the view).
+  level of detail, the distances and clouds together (High is the defaults; Low also halves the
+  shadow detail and the distances). Ambient occlusion is off in every preset: turned on (Graphics →
+  Ambient occlusion, WIP) it costs about 6-7 ms of GPU a frame at a busy base. After that most of the
+  GPU's time in a dense view goes to belts near the camera, trees' leaves and shadows.
 - **Crashes, a hang on quitting or flickering with Render on a separate thread**: that mode
   (Godot's own, experimental, off by default) measured no faster here and can hang on quitting.
   Untick Settings → Graphics → Render on a separate thread and restart (it is written to
@@ -798,7 +822,8 @@ the server console or RCON, for example `/c settings.global["f3d-chunks-per-tick
 
 `-- --stutter-probe=<out.json>[@route]` (client/scripts/debug/stutter_probe.gd) records every
 frame's time and what ran in it, then quits: `@busy` walks through the mock's `--busy` base,
-`@stand` stays put, `@variants` with `--probe-variants` (or `--probe-variants=ssao off,trees
+`@fast` runs two laps of a loop round where the character joined (on the owner's save its
+exoskeletons make that 30-40 tiles a second), `@stand` stays put, `@variants` with `--probe-variants` (or `--probe-variants=ssao off,trees
 hidden`) prices render settings and hides models one kind at a time and lists the models in view.
 Variants combine with `+`; `fit [quality] atlas=4096 splits=1 ...` tries sun_shadows.gd's fitting
 with other settings, `legacy render` the shadows and levels of detail from before it, `lod
@@ -812,7 +837,24 @@ are printed and kept in the JSON's `variants`. `--legacy-render` starts with the
 of detail from before sun_shadows.gd, for a whole run.
 With the separate render thread the renderer's own times are only read with
 `--probe-render-times` (each read waits for that thread). `--belt-items-sync` handles belt items on
-the main thread instead of a worker, for comparing.
+the main thread instead of a worker, for comparing. `--no-belt-stand-ins` draws every belt whole
+(belts drawn under 20 pixels a tile are otherwise light stand-ins, belt_lods.gd), for comparing.
+Each frame also records the sliced systems' books (`fb`: each one's µs used, granted and work
+waiting, frame_budget.gd), the chunks wanted round the focus but not drawn yet (`q_undrawn`, and
+`q_near_undrawn` within two chunks), and at the end the time from a chunk being wanted to its
+buildings being drawn. `python tools/moving_summary.py run.json ... --systems` summarises runs: the
+whole frame, the main thread's own work (the frame less the draw's wait for the GPU) and the GPU,
+p50 / p99 / worst, the speed walked, the sliced work and chunk latency, and per system how often it
+used its whole slice.
+
+The main thread's sliced work (messages, chunk builds, terrain, models, unloading, shadows, the
+pick index, clutter, far belt icons, wires, far merging) shares one allowance a frame
+(frame_budget.gd): what is left under 16.7 ms (or the FPS cap) after the frame's other work, 3-6 ms,
+handed out by priority, with a floor for the near work. `-- --frame-budget=separate` gives every
+system its own slice as before, for comparing.
+The probe's frames also record chunk streaming's queues: `q_unasked` (chunks wanted round the
+focus but not asked for yet), `q_partial` (builds stopped part-way), `q_shadow` (chunks whose
+shadow settings are still to be set) and `q_free`, `q_free_records` (unloaded chunks still to go).
 
 Items on belts glide along their lanes between updates (client/scripts/world/belt_paths.gd). To
 measure how far they stray from them: `python tools/belt_path_check.py layout --rcon-port <port>`

@@ -3,7 +3,13 @@ shader_type spatial;
 // same by day and night. A little shading from the normal and a brighter rim keep the shape.
 render_mode unshaded, blend_mix, depth_draw_always, cull_back, shadows_disabled;
 
+#include "res://shaders/ground_height.gdshaderinc"
+
 uniform vec4 tint : source_color = vec4(0.58, 0.68, 1.0, 0.42);
+
+void vertex() {
+	VERTEX = ground_lift(VERTEX, MODEL_MATRIX);
+}
 
 void fragment() {
 	float facing = clamp(dot(NORMAL, normalize(vec3(0.3, 0.8, 0.5))) * 0.5 + 0.5, 0.0, 1.0);

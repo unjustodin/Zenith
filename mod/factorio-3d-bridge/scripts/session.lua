@@ -327,7 +327,8 @@ function handlers.hello(msg, port)
   local s = storage.f3d
   local sid = tostring(msg.sid or "")
   if not s.client or s.client.sid ~= sid or s.client.port ~= port then
-    s.client = { sid = sid, port = port, last_seen = game.tick, z = msg.z == 1, dc = msg.dc == 1, b = msg.b == 1 }
+    s.client = { sid = sid, port = port, last_seen = game.tick, z = msg.z == 1, dc = msg.dc == 1, b = msg.b == 1,
+      bl = msg.bl == 1 }
     s.rate = nil -- a new client starts at full rate; it sends `rate` if it wants another
     M.handshake()
     return
@@ -335,6 +336,7 @@ function handlers.hello(msg, port)
   s.client.last_seen = game.tick
   s.client.z = msg.z == 1
   s.client.b = msg.b == 1
+  s.client.bl = msg.bl == 1
   -- Decoratives turned on in the client's settings: send the dictionary and resend the chunks.
   if msg.dc == 1 and not s.client.dc then
     s.client.dc = true

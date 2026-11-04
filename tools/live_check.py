@@ -61,6 +61,7 @@ import rcon  # noqa: E402
 
 MOD = "__factorio-3d-bridge__"
 FACTORIO_PORT, CLIENT_PORT = 34200, 34201
+SECOND_CLIENT_PORT = 0  # the two-client check's second client; 0: the client port + 1
 results = []
 
 
@@ -341,7 +342,8 @@ rcon.print(table.concat(made, " "))""".replace("\n", " "))
 def check_multi(c, hello):
     """Two clients on one server (session.lua): the second on its own port gets its own state and
     character; each sees the other's character as a mover; bye drops only it."""
-    c2 = Client(FACTORIO_PORT, CLIENT_PORT + 1)
+    port2 = SECOND_CLIENT_PORT or CLIENT_PORT + 1
+    c2 = Client(FACTORIO_PORT, port2)
     c2.sid += "-second"
     hello2 = (1.0, {"t": "hello", "v": 1, "sid": c2.sid, "w": 1})
     c.send(hello[1])
@@ -355,7 +357,7 @@ def check_multi(c, hello):
         return
     # Earlier sections moved the first character about: put the second next to it, and both
     # clients' focus there, so each is within the other's mover radius.
-    out = mod_lua(f"local s = storage.f3d_extra[{CLIENT_PORT + 1}] local a = storage.f3d.puppet "
+    out = mod_lua(f"local s = storage.f3d_extra[{port2}] local a = storage.f3d.puppet "
                   "local p = a.surface.find_non_colliding_position('character', { a.position.x + 3, a.position.y }, 10, 0.5) or a.position "
                   "s.puppet.teleport(p, a.surface) rcon.print(p.x .. ' ' .. p.y)")
     try:
@@ -374,7 +376,7 @@ def check_multi(c, hello):
     report(welcome[0]["u"] in seen1 and first_unit in seen2, "each sees the other's character as a mover",
            f"{welcome[0]['u']} in first: {welcome[0]['u'] in seen1}, {first_unit} in second: {first_unit in seen2}")
     status = rcon.run("/f3d-status")
-    report(f"another client on port {CLIENT_PORT + 1}" in status, "/f3d-status lists the second client", status.replace("\n", " | ")[:300])
+    report(f"another client on port {port2}" in status, "/f3d-status lists the second client", status.replace("\n", " | ")[:300])
     c2.send({"t": "bye"})
     c2.pump(0.5)
     c2.sock.close()
@@ -2324,6 +2326,171 @@ def check_vehicles(c, hello):
         bx, by = (float(v) for v in back.split())
         mod_lua(f"storage.f3d.puppet.teleport({{ {bx}, {by} }})")
         watch_around(c, hello, bx, by)
+
+
+def check_mine_vehicles(c, hello):
+    """Issue #10: right-click mining picks the vehicle under the mouse and sends its unit number.
+    Every kind of rolling stock on a rail, and a car, a tank and a spidertron, mined by hand with
+    things inside (fuel, cargo) as Factorio does: the vehicle and its contents go to the inventory,
+    the rail under a wagon stays. And from the remote view `decon` with `u` marks only the wagon."""
+    if not clean_spot(c, hello):
+        report(False, "mine vehicles: no clean spot found", SPOT_WHY)
+        return
+    x, y = c.me["x"] / 256, c.me["y"] / 256
+    rails = " ".join(f's.create_entity({{ name = "straight-rail", position = {{ {x - 21 + 2 * i}, {y + 4} }}, direction = 4, force = c.force }})'
+                     for i in range(22))
+    specs = [("locomotive", x - 14, y + 4, "coal", 5), ("cargo-wagon", x - 6, y + 4, "iron-plate", 20),
+             ("fluid-wagon", x + 2, y + 4, None, 0), ("artillery-wagon", x + 10, y + 4, None, 0),
+             ("car", x - 6, y - 6, "coal", 3), ("tank", x + 2, y - 6, "coal", 3), ("spidertron", x + 10, y - 6, None, 0)]
+    lua = f"local c = storage.f3d.puppet local s = c.surface {rails} local out = {{}} "
+    for name, ex, ey, item, n in specs:
+        lua += (f'local e = s.create_entity({{ name = "{name}", position = {{ {ex}, {ey} }}, direction = 4, force = c.force, raise_built = true }}) '
+                + (f'if e then e.insert({{ name = "{item}", count = {n} }}) end ' if item else "")
+                + 'out[#out + 1] = e and (e.unit_number .. " " .. e.position.x .. " " .. e.position.y) or "0 0 0" ')
+    lua += 'rcon.print(table.concat(out, " "))'
+    vals = mod_lua(lua).split()
+    ents = {}
+    for i, (name, *_r) in enumerate(specs):
+        if 3 * i + 2 < len(vals) and int(float(vals[3 * i])):
+            ents[name] = (int(float(vals[3 * i])), float(vals[3 * i + 1]), float(vals[3 * i + 2]))
+    report(len(ents) == len(specs), "mine vehicles: test vehicles built", str(ents)[:300])
+    c.pump(1.0, every=hello)
+    for name, ex, ey, item, n in specs:
+        if name not in ents:
+            continue
+        u, px, py = ents[name]
+        mod_lua(f"storage.f3d.puppet.teleport({{ {px}, {py - 3} }})")
+        c.pump(0.5, every=hello)
+        before = dict(c.inv)
+        cmd = {"t": "mine", "u": u, "p": c.proto_id(name), "x": int(round(px * 256)), "y": int(round(py * 256))}
+        msgs = c.pump(6.0, every=(0.2, cmd), until=lambda m: m.get("t") == "msg")
+        c.send({"t": "mine_stop"})
+        msgs += c.pump(1.0, every=hello)
+        gone = mod_lua(f"local e = game.get_entity_by_unit_number({u}) rcon.print(e and e.valid and 'there' or 'gone')")
+        texts = [m["text"] for m in of_type(msgs, "msg")]
+        got = c.inv.get(name, 0) - before.get(name, 0)
+        report(gone == "gone" and got == 1, f"#10: mining a {name} by its unit number takes it to the inventory",
+               f"{gone}, +{got}, messages {texts}")
+        if item:
+            more = c.inv.get(item, 0) - before.get(item, 0)
+            report(more == n, f"#10: and the {n} {item} inside it come too", f"+{more}")
+    on_rail = mod_lua(f"rcon.print(storage.f3d.puppet.surface.count_entities_filtered({{ name = 'straight-rail', "
+                      f"area = {{ {{ {x - 22}, {y + 3} }}, {{ {x + 22}, {y + 5} }} }} }}))")
+    report(on_rail == "22", "#10: the rails under the mined wagons stay", on_rail)
+    # Remote view: decon with u marks only the wagon, not the rail under it.
+    out = mod_lua(f'local c = storage.f3d.puppet local e = c.surface.create_entity({{ name = "cargo-wagon", position = {{ {x - 6}, {y + 4} }}, '
+                  f'direction = 4, force = c.force, raise_built = true }}) rcon.print(e and (e.unit_number .. " " .. e.position.x .. " " .. e.position.y) or "0 0 0")').split()
+    if len(out) == 3 and int(float(out[0])):
+        u, wx, wy = int(float(out[0])), float(out[1]), float(out[2])
+        c.send({"t": "decon", "i": 0, "x1": int((wx - 0.1) * 256), "y1": int((wy - 0.1) * 256), "x2": int((wx + 0.1) * 256),
+                "y2": int((wy + 0.1) * 256), "u": u, "p": c.proto_id("cargo-wagon")})
+        c.pump(1.0, every=hello)
+        marks = mod_lua(f"local s = storage.f3d.puppet.surface local w = game.get_entity_by_unit_number({u}) local n = 0 "
+                        f"for _, r in pairs(s.find_entities_filtered({{ name = 'straight-rail', position = {{ {wx}, {wy} }}, radius = 3 }})) do "
+                        "if r.to_be_deconstructed() then n = n + 1 end end "
+                        "rcon.print(tostring(w and w.to_be_deconstructed()) .. ' ' .. n)")
+        report(marks == "true 0", "#10: decon with u marks only the wagon (remote view), not the rail under it", marks)
+        destroy_units([u])
+    mod_lua(f'for _, r in pairs(storage.f3d.puppet.surface.find_entities_filtered({{ area = {{ {{ {x - 23}, {y - 10} }}, '
+            f'{{ {x + 23}, {y + 6} }} }}, name = {{ "straight-rail", "locomotive", "cargo-wagon", "fluid-wagon", "artillery-wagon", '
+            '"car", "tank", "spidertron" } })) do r.destroy() end rcon.print("ok")')
+
+
+def check_alt(c, hello, keep=False):
+    """Issue #9: Alt-mode's icons ride on the entity records with no cap (a 24 x 24 smelting array,
+    576 furnaces, past the old 400), a furnace's icon follows the ore put in (aiu, no event), a recipe
+    set from the open screen comes in aiu at once, and machines' recipes' fluids (extra.fa, aiu fa)
+    and a recycler's output vector (eprops vp) for the arrows. `keep` leaves the test base standing
+    (for screenshots)."""
+    if not clean_spot(c, hello, half=30):
+        report(False, "alt: no clean spot found", SPOT_WHY)
+        return
+    x0, y0 = int(c.me["x"] / 256), int(c.me["y"] / 256)
+    out = mod_lua(f"""
+local c = storage.f3d.puppet local s = c.surface local n = 0
+c.force.enable_all_recipes()
+for i = 0, 23 do for j = 0, 23 do
+  local e = s.create_entity({{ name = "steel-furnace", position = {{ {x0} - 24 + i * 2 + 1, {y0} - 28 + j * 2 + 1 }}, force = c.force, raise_built = true }})
+  if e then e.insert({{ name = "iron-ore", count = 20 }}) e.insert({{ name = "coal", count = 5 }}) n = n + 1 end
+end end
+rcon.print(n)""".replace("\n", " "))
+    report(out == "576", "alt: a 24 x 24 smelting array built", out)
+    hello_now = hello[1]
+    # The chunks round the array, sent again (snapshots) with their records.
+    cx0, cy0 = (x0 - 24) // 32, (y0 - 28) // 32
+    wanted = [[cx, cy] for cy in range(cy0 - 1, cy0 + 3) for cx in range(cx0 - 1, cx0 + 3)]
+    c.send({"t": "sub", "c": wanted})
+    c.send({"t": "resync", "full": 0, "c": wanted})
+    msgs = c.pump(15.0, every=(1.0, hello_now))
+    icons = {}
+    for m in msgs:
+        if m.get("t") in ("ents", "add", "upd"):
+            for e in (m["e"] if m["t"] == "ents" else [m["e"]]):
+                if len(e) > 5 and isinstance(e[5], dict) and "ai" in e[5]:
+                    icons[e[0]] = e[5]["ai"]
+        elif m.get("t") == "aiu":
+            for row in m["l"]:
+                icons[row[0]] = row[1:]
+    plates = [u for u, i in icons.items() if i[:2] == ["recipe", "iron-plate"]]
+    report(len(plates) >= 576, "#9: every furnace of the array has its Alt-mode icon (records and aiu, no 400 cap)",
+           f"{len(plates)} furnaces showing iron-plate, {len(icons)} icons in all")
+    # A furnace switched to copper with no event: the watch sends it.
+    out = mod_lua(f"""
+local s = storage.f3d.puppet.surface
+local f = s.find_entities_filtered({{ name = "steel-furnace", position = {{ {x0} - 23, {y0} - 27 }}, radius = 0.6 }})[1]
+local src = defines.inventory.crafter_input or defines.inventory.furnace_source
+local res = defines.inventory.crafter_output or defines.inventory.furnace_result
+f.get_inventory(src).clear() f.crafting_progress = 0 f.get_inventory(res).clear()
+storage.f3d_live_furnace = f
+rcon.print(f.unit_number)""".replace("\n", " "))
+    fu = int(out) if out.isdigit() else 0
+    msgs = c.pump(5.0, every=(1.0, hello_now))
+    mod_lua('storage.f3d_live_furnace.insert({ name = "copper-ore", count = 20 }) rcon.print("ok")')
+    msgs += c.pump(8.0, every=(1.0, hello_now))
+    rows = [r for m in msgs if m.get("t") == "aiu" for r in m["l"] if r[0] == fu]
+    report(fu and rows and rows[-1][1:3] == ["recipe", "copper-plate"],
+           "#9: a furnace given copper ore (no event) sends its new icon in aiu", str(rows[-2:]))
+    # Machines for the arrows: a chemical plant, a refinery, an assembler with a fluid recipe, a recycler.
+    specs = [("chemical-plant", -20, 24, "sulfuric-acid"), ("oil-refinery", -12, 24, "advanced-oil-processing"),
+             ("assembling-machine-2", -5, 24, "electric-engine-unit"), ("recycler", 0, 24, None),
+             ("assembling-machine-2", 5, 24, "iron-gear-wheel")]
+    lua = "local c = storage.f3d.puppet local s = c.surface local out = {} "
+    for name, dx, dy, recipe in specs:
+        lua += (f'local e = s.create_entity({{ name = "{name}", position = {{ {x0 + dx}, {y0 + dy} }}, force = c.force, raise_built = true }}) '
+                + (f'if e then e.set_recipe("{recipe}") end ' if recipe else "")
+                + 'out[#out + 1] = e and e.unit_number or 0 ')
+    lua += 'rcon.print(table.concat(out, " "))'
+    units = [int(v) for v in mod_lua(lua).split()]
+    msgs = c.pump(3.0, every=(1.0, hello_now))
+    c.send({"t": "resync", "full": 0, "c": wanted})
+    msgs += c.pump(8.0, every=(1.0, hello_now))
+    fa = {}
+    for m in msgs:
+        if m.get("t") in ("ents", "add", "upd"):
+            for e in (m["e"] if m["t"] == "ents" else [m["e"]]):
+                if e[0] in units:
+                    fa[e[0]] = (e[5] if len(e) > 5 else {}).get("fa", 0)
+    want = [3, 3, 1, 0, 0]
+    report(len(units) == 5 and [fa.get(u, -1) for u in units] == want,
+           "#9 part 2: machines' recipe fluids for the arrows (extra.fa: sulfuric acid 3, refinery 3, engines 1, recycler and gears 0)",
+           str([fa.get(u, -1) for u in units]))
+    vp = (c.eprops or {}).get(c.proto_id("recycler"), [None] * 4)
+    vp = vp[3] if len(vp) > 3 and isinstance(vp[3], dict) else {}
+    report("vp" in vp and "fb" not in vp, "#9 part 2: the recycler's output side in eprops (vp)", str(vp))
+    # A recipe set from the open screen comes in aiu at once (here: gears -> lubricant-free pipe).
+    gu = units[4] if len(units) == 5 else 0
+    mod_lua(f"storage.f3d.puppet.teleport({{ {x0 + 5}, {y0 + 21} }}) rcon.print('ok')")
+    c.pump(1.0, every=(1.0, hello_now))
+    c.send({"t": "open", "u": gu, "p": c.proto_id("assembling-machine-2"), "x": int((x0 + 5) * 256), "y": int((y0 + 24) * 256)})
+    c.pump(0.5, every=(1.0, hello_now))
+    c.send({"t": "set_recipe", "u": gu, "recipe": "pipe"})
+    msgs = c.pump(2.0, every=(1.0, hello_now))
+    c.send({"t": "close"})
+    rows = [r for m in msgs if m.get("t") == "aiu" for r in m["l"] if r[0] == gu]
+    report(rows and rows[-1][1:3] == ["recipe", "pipe"], "#9: a recipe set from the screen sends its icon in aiu", str(rows))
+    if not keep:
+        mod_lua(f'for _, e in pairs(storage.f3d.puppet.surface.find_entities_filtered({{ area = {{ {{ {x0 - 30}, {y0 - 30} }}, '
+                f'{{ {x0 + 30}, {y0 + 30} }} }}, name = {{ "steel-furnace", "chemical-plant", "oil-refinery", "assembling-machine-2", "recycler" }} }})) do e.destroy() end rcon.print("ok")')
 
 
 def check_save(c, hello):
@@ -4289,15 +4456,17 @@ def handshake(c):
 
 
 def parse_args():
-    global FACTORIO_PORT, CLIENT_PORT
+    global FACTORIO_PORT, CLIENT_PORT, SECOND_CLIENT_PORT
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--factorio-port", type=int, default=FACTORIO_PORT, help="the server's --enable-lua-udp port")
     parser.add_argument("--client-port", type=int, default=CLIENT_PORT, help="the port this binds, as the client would")
     parser.add_argument("--rcon-port", type=int, default=rcon.PORT)
+    parser.add_argument("--second-client-port", type=int, default=0, help="the two-client check's second client (default: the client port + 1)")
     parser.add_argument("--only", choices=["platforms", "planets", "space", "ride", "collectors", "ui", "input", "cliffs", "save", "gear", "planners", "circuits", "build", "info",
-                                           "alerts", "multi", "remnants", "machines", "logic", "vehicles", "hud", "turrets", "weapons", "enemies", "console", "remote", "walk", "states", "mapinfo", "triggers"], help="run just these checks after the handshake")
+                                           "alerts", "multi", "remnants", "machines", "logic", "vehicles", "hud", "turrets", "weapons", "enemies", "console", "remote", "walk", "states", "mapinfo", "triggers", "minevehicles", "alt"], help="run just these checks after the handshake")
     args = parser.parse_args()
     FACTORIO_PORT, CLIENT_PORT, rcon.PORT = args.factorio_port, args.client_port, args.rcon_port
+    SECOND_CLIENT_PORT = args.second_client_port
     return args
 
 
@@ -4326,14 +4495,14 @@ def main():
         print(f"\n{results.count(True)} passed, {results.count(False)} failed")
         sys.exit(0 if all(results) else 1)
 
-    if args.only in ("cliffs", "save", "gear", "build", "alerts", "multi", "remnants", "turrets", "weapons", "enemies", "remote", "walk", "states", "mapinfo", "triggers"):
+    if args.only in ("cliffs", "save", "gear", "build", "alerts", "multi", "remnants", "turrets", "weapons", "enemies", "remote", "walk", "states", "mapinfo", "triggers", "minevehicles", "alt"):
         if handshake(c):
             hello = (1.0, {"t": "hello", "v": 1, "sid": c.sid, "w": 1})
             c.pump(1.0, every=hello)
             {"cliffs": check_cliffs, "save": check_save, "gear": check_gear, "build": check_build_tools,
              "alerts": check_alerts, "multi": check_multi, "remnants": check_remnants, "turrets": check_turrets, "weapons": check_weapons,
              "enemies": check_enemies, "remote": check_remote_view, "walk": check_walk, "states": check_states,
-             "mapinfo": check_map_info, "triggers": check_triggers}[args.only](c, hello)
+             "mapinfo": check_map_info, "triggers": check_triggers, "minevehicles": check_mine_vehicles, "alt": check_alt}[args.only](c, hello)
             report(not c.invalid, "every message passes tools/protocol.py", str(c.invalid[:3]))
         print(f"\n{results.count(True)} passed, {results.count(False)} failed")
         sys.exit(0 if all(results) else 1)
@@ -5515,6 +5684,12 @@ rcon.print({"", "25 chunks, ", tostring(n), " entities: ", profiler})
 
     # --- tiles, capsules, the rail planner, drag building ---------------------------------------
     check_build_tools(c, hello)
+
+    # --- mining vehicles and wagons by unit number (issue #10) -------------------------------------
+    check_mine_vehicles(c, hello)
+
+    # --- Alt-mode's icons with the records, arrows' recipe fluids (issue #9) -----------------------
+    check_alt(c, hello)
 
     # --- alerts without a player ---------------------------------------------------------------
     check_alerts(c, hello)

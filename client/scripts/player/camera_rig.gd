@@ -22,6 +22,7 @@ const EYE_HEIGHT := 1.55
 const FIRST_PERSON_FOV := 75.0
 const LOOK_DEGREES_PER_PIXEL := 0.15
 const Settings := preload("res://scripts/menu/settings.gd")
+const GroundHeight := preload("res://scripts/world/ground_height.gd")
 
 ## Seeing the world through the character's eyes (F5). The mouse is captured and looks around;
 ## building and mining aim at the middle of the screen (aim_position).
@@ -91,7 +92,7 @@ func _ready() -> void:
 	camera.make_current()
 	_configure_from_command_line()
 	if target != null:
-		global_position = target.global_position
+		global_position = _follow(target.global_position)
 	# --camera=factorio starts in Factorio's view (handy for screenshots).
 	if "--camera=factorio" in OS.get_cmdline_user_args():
 		toggle_factorio_view.call_deferred()
@@ -128,18 +129,18 @@ func apply_settings() -> void:
 func _process(delta: float) -> void:
 	if not _taken.is_empty():
 		if taken_focus != Vector2.INF:
-			global_position = Vector3(taken_focus.x, 0.0, taken_focus.y)
+			global_position = _follow(Vector3(taken_focus.x, 0.0, taken_focus.y))
 		return
 	if first_person:
 		# Locked to the character: any lag would feel like a lurching head.
 		if target != null:
-			global_position = target.global_position
+			global_position = GroundHeight.lift(target.global_position)
 		var look := Basis(Vector3.UP, deg_to_rad(_look_yaw)) * Basis(Vector3.RIGHT, -deg_to_rad(_look_pitch))
 		camera.transform = Transform3D(look, Vector3(0.0, EYE_HEIGHT, 0.0))
 		camera.projection = Camera3D.PROJECTION_PERSPECTIVE
 		return
 	if target != null:
-		global_position = global_position.lerp(target.global_position, 1.0 - exp(-delta * 8.0))
+		global_position = global_position.lerp(_follow(target.global_position), 1.0 - exp(-delta * 8.0))
 	yaw_degrees = lerpf(yaw_degrees, _yaw_goal, 1.0 - exp(-delta * 10.0))
 	# A ride's camera moves slowly, as a film's would.
 	var rate := 1.6 if not _cine_saved.is_empty() else 10.0
@@ -183,7 +184,7 @@ func toggle_factorio_view() -> void:
 	_snap(360.0 * roundf(_yaw_goal / 360.0), FACTORIO_PITCH, size / ORTHO_SCALE, true)
 	_factorio_snap = [_yaw_goal, pitch_degrees, _distance_goal]
 	if target != null:
-		global_position = target.global_position
+		global_position = _follow(target.global_position)
 
 
 ## Back to the view before Factorio's, if Factorio's (as snapped to, or changed since) is on.
@@ -304,7 +305,7 @@ func hand_back() -> void:
 		_crosshair.visible = true
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if first_person else Input.MOUSE_MODE_VISIBLE
 	if target != null:
-		global_position = target.global_position
+		global_position = _follow(target.global_position)
 	_process(0.0)  # the camera in its place now, not a frame late
 
 
@@ -404,6 +405,15 @@ func zoom(factor: float) -> void:
 
 
 ## Where the camera looks, on the ground (tiles).
+## Where the camera's focus sits over a point: on an add-on's hills when the player asks for it
+## (Settings > Camera > Camera follows the hills), else level at the flat world's height (owner:
+## "camera elevation on terrain off").
+static func _follow(p: Vector3) -> Vector3:
+	if bool(Settings.get_value("camera", "follow_hills")):
+		return GroundHeight.lift(p)
+	return Vector3(p.x, 0.0, p.z)
+
+
 func focus_point() -> Vector2:
 	if vr_focus != Vector2.INF:
 		return vr_focus
@@ -430,7 +440,8 @@ func ground_right() -> Vector3:
 ## The point on the ground under a screen position, or null.
 func ground_point(screen_pos: Vector2):
 	var r := ray(screen_pos)
-	return Plane(Vector3.UP, 0.0).intersects_ray(r[0], r[1])
+	# On hills (ground_height.gd) the ray is walked onto the ground drawn; flat, the plane y = 0.
+	return GroundHeight.ray_hit(r[0], r[1])
 
 
 ## [origin, direction] of the ray under a screen position: the mouse's, or the VR laser.

@@ -9,6 +9,7 @@
 
 local puppet = require("scripts.puppet")
 local map = require("scripts.map")
+local world = require("scripts.world")
 local transport = require("scripts.transport")
 local history = require("scripts.history")
 local tracker = require("scripts.tracker")
@@ -262,6 +263,13 @@ function M.decon(cmd)
     else
       spec.surface = nil
       puppet.surface(c).cancel_deconstruct_area(spec)
+    end
+  elseif (tonumber(cmd.u) or 0) > 0 then
+    -- One entity by its unit number (a train mined from the remote view: not the rail under it).
+    local at = centre_of(spec.area)
+    local e = puppet.find_target(puppet.surface(c), { x = world.fixed(at.x), y = world.fixed(at.y), u = cmd.u, p = cmd.p })
+    if e and e.valid and e.force == c.force then
+      e.order_deconstruction(c.force)
     end
   else
     tracker.deconstructing(puppet.surface(c), spec.area, c.force, function()

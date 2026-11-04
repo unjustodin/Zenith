@@ -14,6 +14,7 @@ shader_type spatial;
 render_mode cull_back;
 
 #include "res://shaders/noise.gdshaderinc"
+#include "res://shaders/ground_height.gdshaderinc"
 
 uniform float detail = 1.0;
 uniform float bump = 1.0;
@@ -44,6 +45,8 @@ varying vec3 world_normal;
 varying flat vec4 layers;
 varying flat vec4 masks;
 varying flat vec2 tile_origin;
+// The hills' slope here (ground_height.gdshaderinc), world space; straight up on flat ground.
+varying vec3 hill_normal;
 
 void vertex() {
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
@@ -51,6 +54,10 @@ void vertex() {
 	layers = CUSTOM0;
 	masks = CUSTOM1;
 	tile_origin = UV2;
+	// Hills: the vertex lifted by the ground under it. world_pos stays flat, so the tile pictures,
+	// noise and banks are worked out as before.
+	hill_normal = ground_n(world_pos.xz);
+	VERTEX = ground_lift(VERTEX, MODEL_MATRIX);
 }
 
 // Distance from `f` (position in the tile) to the nearest neighbour named in `mask`.
@@ -214,7 +221,7 @@ void fragment() {
 		// Height = 0.06 * mid + 0.015 * fine; the gradient tilts the normal. Chain rule: the
 		// noise is sampled at p * scale, so its gradient scales too.
 		vec2 grad = bump_scale * (mid.yz * 0.9 * 0.06 + fine.yz * 4.3 * 0.015);
-		vec3 nrm = normalize(vec3(-grad.x, 1.0, -grad.y));
+		vec3 nrm = normalize(hill_normal + vec3(-grad.x, 0.0, -grad.y));
 		NORMAL = normalize((VIEW_MATRIX * vec4(nrm, 0.0)).xyz);
 	}
 }

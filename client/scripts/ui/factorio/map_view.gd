@@ -42,6 +42,9 @@ const REFRESH := 6.0
 const MAX_CHUNKS := 96
 ## Screen pixels a second WASD moves the map.
 const PAN_SPEED := 700.0
+## How far the layers (map_layers.gd) are drawn past the window's edges, and so how far the map
+## moves before they are drawn again: while panning, not every frame.
+const LAYERS_SHIFT_PX := 128.0
 
 ## Zoomed in past MAX_ZOOM at this point (tiles): factorio_ui.gd shows the world there.
 signal zoom_to_world(at: Vector2)
@@ -89,6 +92,7 @@ var _tag_editing := -1  # id of the tag being edited
 var _unghost := {}  # unghost request id -> the screen point right-clicked
 var _me := [Vector2.ZERO, 0.0]
 var _redraw := true
+var _layers_now := true  # opened: the layers drawn at once, around the view
 ## The landing pad asked for on switching to a planet (its ask's id; -1 none, or the view was moved).
 var _pad_q := -1
 
@@ -99,6 +103,8 @@ func _ready() -> void:
 	focus_mode = Control.FOCUS_NONE
 	visible = false
 	layers.model = model
+	# Panning draws the layers again only every LAYERS_SHIFT_PX (they move with the map meanwhile).
+	layers.shift_px = LAYERS_SHIFT_PX
 	add_child(layers)
 	_build_panel()
 	_build_surfaces()
@@ -145,6 +151,7 @@ func open(on: bool) -> void:
 		_me = _character()
 		centre = _me[0]
 		_redraw = true
+		_layers_now = true
 	elif model.map_si != 0:
 		model.set_map_surface(0)  # back to the character's surface, as in Factorio
 
@@ -213,8 +220,13 @@ func _process(delta: float) -> void:
 	if _redraw or not model.live_pings().is_empty():
 		_redraw = false
 		queue_redraw()
-		layers.character_at = _me[0]
+	# The layers draw again only what changed: their own data, or the view moved or zoomed.
+	layers.character_at = _me[0]
+	if _layers_now:
+		_layers_now = false
 		layers.redraw(centre, scale)
+	else:
+		layers.follow(centre, scale, false)
 
 
 ## WASD and the arrow keys, unless the tag dialog is being typed in.

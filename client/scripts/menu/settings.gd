@@ -34,6 +34,7 @@ const DEFAULTS := {
 		"render_scale": 1.0,
 		"antialiasing": "fxaa",  # off, fxaa, taa, msaa2, msaa4, msaa8
 		"shadows": "high",  # off, low, medium, high, ultra (sun_shadows.gd)
+		"shadow_distance": 0,  # tiles the shadows may reach from the camera; 0: the quality's (sun_shadows.gd)
 		# high, medium, low: how soon far-away models and their shadows simplify (model_lods.gd); the
 		# models near the character stay whole at every level
 		"lod_quality": "medium",
@@ -43,15 +44,21 @@ const DEFAULTS := {
 		# render CPU, but its per-pixel table reads cost GPU time (laptop at Ultra: 1-2 ms more
 		# standing), so off unless the CPU is the limit. Read when models load: after a restart.
 		"merged_materials": false,
-		"ssao": true,
+		# Screen-space ambient occlusion: off (owner's decision; WIP). Its own step is cheap, but it makes
+		# Godot's depth pre-pass work out every pixel's normal and roughness, which runs the models'
+		# weathering: 6-7 ms of GPU a frame at a busy base (PERFORMANCE-AUDIT.md, item 2).
+		"ssao": false,
 		# Godot's renderer on a thread of its own (faster on busy bases); off: the main thread, as
 		# before. Read at start-up from ENGINE_OVERRIDES, so it applies after a restart.
 		"render_thread": false,  # Godot calls it experimental; no gain measured, rare hangs on quitting
 		"view_radius": 10,  # chunks around the camera that are drawn (doubled from 5)
 		"entity_radius": 192,  # tiles around the camera where moving things and machine states are shown (doubled from 96)
-		"belt_near_distance": 24,  # tiles round the focus where every item on belts is drawn (the mod sends them)
+		# Items on belts are drawn out to belt_distance (0 off): moving, from the character outwards, as
+		# far as belt_updates allows (the most items and lanes the server reads an update), and past
+		# that each lane as icons of what it carries (owner: one distance and a cap, not two distances).
+		"belt_distance": 160,
+		"belt_updates": 6000,  # 0: Unlimited, every item within belt_distance moves
 		"belt_smooth": true,  # belt items read in one tick, every update (smooth on curves) rather than spread over ticks
-		"belt_far_distance": 160,  # tiles out to which belt lanes show an icon of what they carry; 0 off
 		"decorative_distance": 192,
 		# While the game runs under 60 UPS, ask the bridge for less (distances, minimap refreshes,
 		# frame rate) below these settings, and give it back when it recovers (ups_governor.gd)
@@ -81,11 +88,15 @@ const DEFAULTS := {
 	"interface": {
 		"ui_scale": "auto",  # auto, 0.75 ... 2.0
 		"show_help": false,  # Factorio's "Show mouse and keyboard control hints"; Factorio shows no help panel
-		"hide_tall": false,  # Factorio's "Toggle visibility of tall entities" shortcut: fade tall ones in the way
 		"debug_overlay": false,
 		"tooltip_delay": 0.5,  # seconds before a tooltip shows
 		"message_delay": 4.0,  # seconds a message stays (Factorio's "Chat message delay")
 		"alt_mode": false,  # Alt-mode, remembered between games like Factorio's
+		# Factorio's Interface > Alt-mode arrows (issue #9), with its defaults (seen in 2.1.23 with a fresh
+		# config: machines' and pumps' arrows show, inserters' don't)
+		"alt_inserter_arrows": false,
+		"alt_pump_arrows": true,
+		"alt_machine_arrows": true,
 		"entity_info": true,  # the entity info panel on the right
 		"shortcut_bar": true,  # the shortcut bar right of the quickbar
 		"research_progress": true,  # the research in progress, top left
@@ -95,6 +106,7 @@ const DEFAULTS := {
 	},
 	"camera": {
 		"default_view": "angled",  # angled, factorio, first_person
+		"follow_hills": false,  # the camera rises and falls with an add-on's hills (api.terrain); off: stays level (owner)
 		"look_sensitivity": 1.0,
 		"invert_y": false,
 		"orthographic": false,  # the angled view's projection; Factorio's view (F6) is always orthographic
@@ -143,16 +155,16 @@ static func write_engine_overrides() -> void:
 ## any of these differs from all of them (preset_now()).
 const PRESETS := {
 	"low": {"shadows": "low", "ssao": false, "lod_quality": "low", "view_radius": 5, "entity_radius": 96,
-		"belt_near_distance": 16, "belt_far_distance": 64, "decorative_distance": 96, "decorative_density": 0.5,
+		"belt_updates": 2000, "belt_distance": 64, "decorative_distance": 96, "decorative_density": 0.5,
 		"clouds": false},
 	"medium": {"shadows": "medium", "ssao": false, "lod_quality": "medium", "view_radius": 7, "entity_radius": 128,
-		"belt_near_distance": 24, "belt_far_distance": 96, "decorative_distance": 128, "decorative_density": 0.75,
+		"belt_updates": 4000, "belt_distance": 96, "decorative_distance": 128, "decorative_density": 0.75,
 		"clouds": true},
-	"high": {"shadows": "high", "ssao": true, "lod_quality": "medium", "view_radius": 10, "entity_radius": 192,
-		"belt_near_distance": 24, "belt_far_distance": 160, "decorative_distance": 192, "decorative_density": 1.0,
+	"high": {"shadows": "high", "ssao": false, "lod_quality": "medium", "view_radius": 10, "entity_radius": 192,
+		"belt_updates": 6000, "belt_distance": 160, "decorative_distance": 192, "decorative_density": 1.0,
 		"clouds": true},
-	"ultra": {"shadows": "ultra", "ssao": true, "lod_quality": "high", "view_radius": 14, "entity_radius": 256,
-		"belt_near_distance": 32, "belt_far_distance": 320, "decorative_distance": 256, "decorative_density": 1.0,
+	"ultra": {"shadows": "ultra", "ssao": false, "lod_quality": "high", "view_radius": 14, "entity_radius": 256,
+		"belt_updates": 12000, "belt_distance": 320, "decorative_distance": 256, "decorative_density": 1.0,
 		"clouds": true},
 }
 
@@ -263,16 +275,39 @@ static func load_settings() -> void:
 	if not existed:
 		_cfg = ConfigFile.new()
 	var renamed := _rename_values()
-	if _migrate() or renamed or not existed:
+	var reset := _ssao_off_once()
+	if _migrate() or renamed or reset or not existed:
 		_cfg.save(path)
 
 
 ## Values that were renamed: an older name of the angled view's setting is read as it. True when one changed.
 static func _rename_values() -> bool:
+	var changed := false
 	if str(_cfg.get_value("camera", "default_view", "")) == "zomboid":
 		_cfg.set_value("camera", "default_view", "angled")
-		return true
-	return false
+		changed = true
+	# "Belt items far away" became the one Belt item distance; "Belt items in full" gave way to
+	# Belt updates (how far items move follows from it).
+	if _cfg.has_section_key("graphics", "belt_far_distance"):
+		if not _cfg.has_section_key("graphics", "belt_distance"):
+			_cfg.set_value("graphics", "belt_distance", _cfg.get_value("graphics", "belt_far_distance"))
+		_cfg.erase_section_key("graphics", "belt_far_distance")
+		changed = true
+	if _cfg.has_section_key("graphics", "belt_near_distance"):
+		_cfg.erase_section_key("graphics", "belt_near_distance")
+		changed = true
+	return changed
+
+
+## SSAO was on by default and in the High and Ultra presets until it measured 6-7 ms of GPU a
+## frame; it is off now (a WIP option), and turned off once in files saved before. True when changed.
+static func _ssao_off_once() -> bool:
+	if bool(_cfg.get_value("meta", "ssao_off", false)):
+		return false
+	_cfg.set_value("meta", "ssao_off", true)
+	if _cfg.has_section_key("graphics", "ssao"):
+		_cfg.set_value("graphics", "ssao", false)
+	return true
 
 
 ## The project was renamed from "Factorio 3D" to "Zenith", which moved Godot's user folder

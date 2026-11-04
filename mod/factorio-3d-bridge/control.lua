@@ -36,6 +36,7 @@ local console = require("scripts.console")
 local profile = require("scripts.profile")
 local budget = require("scripts.budget")
 local requests = require("scripts.requests")
+local alt_mode = require("scripts.alt_mode")
 
 script.on_init(session.init_storage)
 script.on_configuration_changed(function() session.each_client(session.init_storage) end)
@@ -53,7 +54,7 @@ local STEPS = {
   { "planets", planets.tick }, { "space", space.tick }, { "collectors", collectors.tick },
   { "world", world.tick }, { "movers", movers.tick }, { "belt_items", belt_items.tick }, { "belt_lanes", belt_items.far_tick },
   { "ground_items", ground_items.tick }, { "fluids_power", fluids_power.tick },
-  { "inserters", inserters.tick }, { "sky", sky.tick }, { "ui_actions", ui_actions.tick },
+  { "inserters", inserters.tick }, { "sky", sky.tick }, { "ui_actions", ui_actions.tick }, { "alt_mode", alt_mode.tick },
   { "alerts", alerts.tick }, { "equipment", equipment.tick }, { "players", players.tick },
   { "enemies", enemies.tick }, { "requests", requests.tick },
 }

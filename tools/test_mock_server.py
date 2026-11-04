@@ -173,6 +173,32 @@ if len(ticks) >= 2:
     step_y = round((ticks[-1] - ticks[-2]) * mock_server.BELT_SPEED * 256)
     check(moved and all(abs(d - step_y) <= 1 for d in moved), f"belt items keep their ids and move south at belt speed: {moved[:3]}")
 
+# bl: lanes that don't change are held (not sent) once settled; ln groups each part's items by lane.
+HELLO["bl"] = 1
+send(HELLO)
+step(13)
+take()
+belt_speed = mock_server.BELT_SPEED
+mock_server.BELT_SPEED = 0  # the belt backs up
+step(24)
+settling = of_type(take(), "bi")
+step(24)
+holding = of_type(take(), "bi")
+check(settling and all("ln" in m for m in settling) and any(m["l"] for m in settling),
+      f"bl: every bi part says which lane its items came from (ln), and changed lanes are sent: {[len(m['l']) for m in settling]}")
+# (Every lane is still read in full every 16 updates: a few lanes come again now and then.)
+check(holding and sum(len(m["l"]) for m in holding) * 4 <= sum(len(m["l"]) for m in settling)
+      and all(m.get("dl", []) == [] for m in holding),
+      f"bl: a stopped belt's lanes are held: few items sent, none dropped: {[(len(m['l']), m.get('dl')) for m in holding]}")
+mock_server.BELT_SPEED = belt_speed
+step(13)
+moving = of_type(take(), "bi")
+check(any(m["l"] for m in moving), "bl: when the belt moves again its lanes are sent again")
+del HELLO["bl"]
+send(HELLO)
+step(2)
+take()
+
 # `rate` 3: belt items, movers and inserter hands less often, each saying how far apart (p), as
 # the mod's rate.lua; the character's own state as often as ever.
 send({"t": "rate", "l": 3})
@@ -325,6 +351,8 @@ asm = find_ent("assembling-machine-1", 8.5, -2.5)
 furnace = find_ent("stone-furnace", 2.0, -4.0)
 lab = find_ent("lab", 16.5, 0.5)
 check(chest and asm and furnace and lab, "the starter base has a chest, assembler, furnace and lab")
+check(asm and len(asm) > 5 and asm[5].get("ai") == ["recipe", "iron-gear-wheel"] and not (len(chest) > 5 and "ai" in chest[5]),
+      f"#9: a machine's record carries its Alt-mode icon (extra.ai), a chest's none: {asm}")
 game.player["x"], game.player["y"] = 4.0, 9.0
 step(2)
 take()
@@ -1191,8 +1219,11 @@ check(ai and [ins[0], "item", "iron-plate"] in ai[-1]["l"] and any(r[1] == "reci
       f"Alt-mode icons: recipes and inserter filters: {ai[-1:]}")
 send({"t": "set_inserter", "u": ins[0], "f": ["iron-plate", "", "coal"], "m": "blacklist", "use": 1, "st": 2})
 step(61)
-ai = of_type(take(), "ai")
+msgs = take()
+ai = of_type(msgs, "ai")
 check(ai and [ins[0], "item", "iron-plate", ["coal"]] in ai[-1]["l"], f"Alt-mode: every filter of an inserter: {ai[-1:]}")
+aiu = [row for m in of_type(msgs, "aiu") for row in m["l"]]
+check([ins[0], "item", "iron-plate", ["coal"]] in aiu, f"#9: a changed filter goes out as aiu, Alt-mode on or not: {aiu}")
 send({"t": "set_inserter", "u": ins[0], "f": ["iron-plate"], "m": "blacklist", "use": 1, "st": 2})
 send({"t": "alt", "on": 0})
 plates = game.player["inventory"]["iron-plate"]
@@ -1203,8 +1234,10 @@ send({"t": "alt", "on": 1})
 send(open_cmd(asm))
 send({"t": "set_recipe", "u": asm[0], "recipe": ""})
 step(61)
-ai = of_type(take(), "ai")
+msgs = take()
+ai = of_type(msgs, "ai")
 check(ai and all(r[0] != asm[0] for r in ai[-1]["l"]), f"Alt-mode: nothing over a machine with no recipe: {ai[-1:]}")
+check([asm[0], ""] in [row for m in of_type(msgs, "aiu") for row in m["l"]], "#9: and aiu clears its icon")
 send({"t": "set_recipe", "u": asm[0], "recipe": "iron-gear-wheel"})
 step(2)
 take()

@@ -1,4 +1,5 @@
 extends RefCounted
+const GroundHeight := preload("res://scripts/world/ground_height.gd")
 ## api.camera: an add-on takes Zenith's camera, moves it as it likes, and hands it back; the
 ## player's own view (the angled view, Factorio's view, first person, the zoom) comes back exactly
 ## as it was. One add-on has the camera at a time. While it does:
@@ -133,7 +134,7 @@ func ground_point(screen_pos: Vector2):
 	if rig == null:
 		return null
 	var cam: Camera3D = rig.camera
-	return Plane(Vector3.UP, 0.0).intersects_ray(cam.project_ray_origin(screen_pos), cam.project_ray_normal(screen_pos))
+	return GroundHeight.ray_hit(cam.project_ray_origin(screen_pos), cam.project_ray_normal(screen_pos))
 
 
 ## The ground point under the middle of the screen, or null when looking above the horizon.

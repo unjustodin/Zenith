@@ -8,6 +8,7 @@ uniform bool billboard = true;  // false: lies as the instance transform says (d
 uniform float brightness = 1.0;  // dims smoke at night; flashes keep 1
 
 varying vec2 frame_uv;
+#include "res://shaders/ground_height.gdshaderinc"
 
 void vertex() {
 	float frame = floor(INSTANCE_CUSTOM.x + 0.001);
@@ -19,7 +20,11 @@ void vertex() {
 		float s = sin(INSTANCE_CUSTOM.z);
 		vec2 v = VERTEX.xy * size;
 		VERTEX = vec3(v.x * c - v.y * s, v.x * s + v.y * c, 0.0);
-		MODELVIEW_MATRIX = VIEW_MATRIX * mat4(INV_VIEW_MATRIX[0], INV_VIEW_MATRIX[1], INV_VIEW_MATRIX[2], MODEL_MATRIX[3]);
+		vec4 at = MODEL_MATRIX[3];
+		at.y += ground_h(at.xz);
+		MODELVIEW_MATRIX = VIEW_MATRIX * mat4(INV_VIEW_MATRIX[0], INV_VIEW_MATRIX[1], INV_VIEW_MATRIX[2], at);
+	} else {
+		VERTEX = ground_lift(VERTEX, MODEL_MATRIX);
 	}
 }
 

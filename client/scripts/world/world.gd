@@ -10,6 +10,7 @@ const TerrainMesher := preload("res://scripts/world/terrain_mesher.gd")
 const TerrainTextures := preload("res://scripts/world/terrain_textures.gd")
 const ModelLods := preload("res://scripts/world/model_lods.gd")
 const FarChunks := preload("res://scripts/world/far_chunks.gd")
+const FrameBudget := preload("res://scripts/world/frame_budget.gd")
 
 const CHUNK := 32
 const SUBSCRIBE_REFRESH := 5.0  # resend the subscription now and then in case it was lost
@@ -55,6 +56,8 @@ const WATCHDOG_INTERVAL := 3.0
 ## A chunk's entities were redrawn (something in it changed) or it was unloaded. Overlays drawn
 ## from entity records (wires, ghosts, marks) rebuild from this.
 signal entities_changed(chunk: Vector2i)
+## A record's Alt-mode arrows changed without the chunk being drawn again (`aiu` fa).
+signal alt_changed(chunk: Vector2i)
 
 
 ## A static entity as last reported by the server.
@@ -186,12 +189,16 @@ func reset(keep_protos := false) -> void:
 	_cargo_ghosts.clear()
 	_cargo_ghost_tiles.clear()
 	working.clear()
+	_stated.clear()
 	animator.reset()
 	if not keep_protos:
 		protos.clear()
 	_subscribed = []
+	_asked = {}
+	_coming = {}
 	_dirty.clear()
 	_pending.clear()
+	_partial.clear()
 	_dirty_terrain.clear()
 	_waiting_gfx.clear()
 	# Every chunk drawn with the old surface's ground is gone: room for the new one's.
@@ -231,6 +238,8 @@ func handle(msg: Dictionary) -> void:
 			protos.add_fluids(_array(msg.get("l")))
 		"ready":
 			_subscribed = []  # subscribe on the next frame
+			_asked = {}
+			_coming = {}
 		"chunk":
 			_on_chunk(msg)
 		"ents":
@@ -253,6 +262,9 @@ func handle(msg: Dictionary) -> void:
 			_on_tiles(_array(msg.get("l")))
 		"st":
 			_on_states(_array(msg.get("l")))
+		"aiu":
+			_on_alt_icons(_array(msg.get("l")))
+			_on_alt_fluids(_array(msg.get("fa")))
 
 
 func _on_chunk(msg: Dictionary) -> void:
@@ -312,6 +324,8 @@ func _add(a) -> void:
 	var cv: ChunkView = chunks.get(r.chunk)
 	if cv == null:
 		return
+	if r.unit != 0 and working.has(r.unit):
+		_stated_in(r.chunk)[r.unit] = true
 	if entities.has(r.key):
 		_remove(r.key)
 	# A ghost (extra.gh) goes when its entity is built on its spot, which robots do without telling.
@@ -325,6 +339,8 @@ func _add(a) -> void:
 			_remove(ghost.key)
 	entities[r.key] = r
 	cv.entities[r.key] = r
+	if r.extra.has("ai") and not alt_icon(r).is_empty():
+		cv.alt[r.key] = r
 	cv.pick_grid = []
 	var rp := protos.entity(r.proto_id)
 	if rp != null and ModelLibrary.REMNANT_TYPES.has(rp.type):
@@ -340,6 +356,54 @@ func _add(a) -> void:
 		_add_cargo(r, false)
 	elif _is_cargo_ghost(r):
 		_add_cargo(r, true)
+
+
+## Alt-mode's icons that changed with no new record (issue #9, `aiu`): [unit, kind, name, more?],
+## kind "" when it shows none now. Only the icon changes; the chunk isn't drawn again.
+func _on_alt_icons(list: Array) -> void:
+	for row in list:
+		if not (row is Array) or row.size() < 2:
+			continue
+		var r: Rec = entities.get(int(row[0]))
+		if r == null:
+			continue
+		var cv: ChunkView = chunks.get(r.chunk)
+		if str(row[1]) == "" or row.size() < 3:
+			r.extra.erase("ai")
+			if cv != null:
+				cv.alt.erase(r.key)
+			continue
+		r.extra["ai"] = row.slice(1)
+		if cv != null:
+			cv.alt[r.key] = r
+
+
+## A crafting machine's recipe's fluids changed (`aiu` fa: [unit, mask], 1 in, 2 out): Alt-mode's
+## machine arrows (alt_arrows.gd) follow.
+func _on_alt_fluids(list: Array) -> void:
+	for row in list:
+		if not (row is Array) or row.size() < 2:
+			continue
+		var r: Rec = entities.get(int(row[0]))
+		if r == null:
+			continue
+		if int(row[1]) > 0:
+			r.extra["fa"] = int(row[1])
+		else:
+			r.extra.erase("fa")
+		alt_changed.emit(r.chunk)
+
+
+## Alt-mode's icon of a record as [kind, name, more names...], or [] for none.
+static func alt_icon(r: Rec) -> Array:
+	var ai = r.extra.get("ai")
+	if not (ai is Array) or ai.size() < 2 or str(ai[1]) == "":
+		return []
+	var icon := [str(ai[0]), str(ai[1])]
+	if ai.size() >= 3 and ai[2] is Array:  # a filter inserter's other filters
+		for f in ai[2]:
+			icon.append(str(f))
+	return icon
 
 
 ## Factorio removes remnants an entity is built over (CorpsePrototype remove_on_entity_placement).
@@ -384,6 +448,7 @@ func _remove(key) -> void:
 	var cv: ChunkView = chunks.get(r.chunk)
 	if cv != null:
 		cv.entities.erase(key)
+		cv.alt.erase(key)
 		cv.pick_grid = []
 		_dirty[r.chunk] = true
 
@@ -628,12 +693,45 @@ func _on_states(list: Array) -> void:
 		# Models show the state through anim.gd; placeholders change colour, so rebuild.
 		var r: Rec = entities.get(unit)
 		if r != null:
+			if was < 0:
+				_stated_in(r.chunk)[unit] = true
 			var cv: ChunkView = chunks.get(r.chunk)
 			if cv != null and cv.placeholder_keys.has(r.key):
 				_dirty[r.chunk] = true
 			if state != was:
 				animator.state_changed(r)
 		i += 2
+
+
+## The units with a state (`working`) by their record's chunk, for what looks at machines near a
+## point a few times a second (fx.gd's sounds and smoke, working_glow.gd): they went through every
+## state in the world, tens of thousands on a big base, 2-5 ms each time while walking.
+var _stated := {}  # Vector2i -> {unit: true}
+
+
+func _stated_in(c: Vector2i) -> Dictionary:
+	var units: Dictionary = _stated.get(c, {})
+	if units.is_empty():
+		_stated[c] = units
+	return units
+
+
+## The units with a state whose record lies in the chunks within `radius` tiles of `at` (a square).
+func working_near(at: Vector2, radius: float) -> Array:
+	var out: Array = []
+	var lo := chunk_of(at - Vector2(radius, radius))
+	var hi := chunk_of(at + Vector2(radius, radius))
+	for cy in range(lo.y, hi.y + 1):
+		for cx in range(lo.x, hi.x + 1):
+			var c := Vector2i(cx, cy)
+			var units: Dictionary = _stated.get(c, {})
+			for unit in units.keys():
+				var r: Rec = entities.get(unit)
+				if r == null or r.chunk != c:
+					units.erase(unit)  # gone, or moved to another chunk's set
+				else:
+					out.append(unit)
+	return out
 
 
 func _process(delta: float) -> void:
@@ -656,6 +754,57 @@ func _process(delta: float) -> void:
 	_update_shadow_casters()
 	_prof("shadows", t0)
 	_watch_for_missing(delta)
+	if track_latency:
+		_track_latency(delta)
+
+
+## --stutter-probe: how long chunks take to appear. A chunk entering the wanted square round the
+## focus is noted, and again if it comes within NEAR_RING chunks of the focus still not drawn (in
+## view at the default camera); once drawn (its ground and buildings), the time it took goes to
+## drawn_latency as [ms since wanted, its ring from the focus's chunk then, ms since it came near
+## or -1]. undrawn() is how many wanted aren't drawn yet, near_undrawn how many of them are near.
+const NEAR_RING := 2
+var near_undrawn := 0
+var _near_at := {}
+var track_latency := false
+var drawn_latency: Array = []
+var _wanted_at := {}  # Vector2i -> msec it was first wanted (while not drawn)
+var _latency_timer := 0.0
+var _latency_center := Vector2i(0x7fffffff, 0)
+
+
+func _track_latency(delta: float) -> void:
+	var now := Time.get_ticks_msec()
+	if _wanted_center != _latency_center:
+		_latency_center = _wanted_center
+		var wanted := {}
+		for c in _wanted:
+			wanted[c] = true
+			if not _wanted_at.has(c) and not _drawn(c):
+				_wanted_at[c] = now
+		for c in _wanted_at.keys():
+			if not wanted.has(c):
+				_wanted_at.erase(c)  # left the square before it was drawn
+				_near_at.erase(c)
+	_latency_timer += delta
+	if _latency_timer < 0.05:
+		return
+	_latency_timer = 0.0
+	near_undrawn = 0
+	for c: Vector2i in _wanted_at.keys():
+		var ring := maxi(absi(c.x - _wanted_center.x), absi(c.y - _wanted_center.y))
+		if _drawn(c):
+			drawn_latency.append([now - int(_wanted_at[c]), ring, now - int(_near_at[c]) if _near_at.has(c) else -1])
+			_wanted_at.erase(c)
+			_near_at.erase(c)
+		elif ring <= NEAR_RING:
+			near_undrawn += 1
+			if not _near_at.has(c):
+				_near_at[c] = now
+
+
+func undrawn() -> int:
+	return _wanted_at.size()
 
 
 ## A gap can't say what it lost, so this guesses: chunks known to be incomplete, chunks still
@@ -691,54 +840,82 @@ func _missing(cv: ChunkView) -> bool:
 	return cv.is_incomplete() or (not cv.loaded and Time.get_ticks_msec() - cv.created_msec > MISSING_CHUNK_MSEC)
 
 
-var _wanted: Array = []
+var _wanted: Array = []  # the chunks round the focus, nearest first
 var _wanted_center := Vector2i(0x7fffffff, 0)
 var _wanted_radius := -1
+var _asked := {}  # _subscribed as a set
+var _coming := {}  # chunks asked for and not drawn yet
+var _wanted_moved := false  # _wanted changed since the last step
+
+
+## The offsets of a square of chunks `radius` round its middle, nearest first (by squared distance,
+## then row by row). The subscription list used to be sorted with a GDScript comparison whenever the
+## focus crossed a chunk edge: 841 chunks at Ultra, 3-12 ms in one frame while walking (docs/
+## PERFORMANCE-AUDIT.md 4.7). Now one pass into buckets, and only when the radius changes.
+static var _ring_orders := {}
+
+
+static func ring_order(radius: int) -> Array:
+	var order: Array = _ring_orders.get(radius, [])
+	if not order.is_empty():
+		return order
+	var buckets := {}  # squared distance -> offsets
+	for dy in range(-radius, radius + 1):
+		for dx in range(-radius, radius + 1):
+			var d := dx * dx + dy * dy
+			if not buckets.has(d):
+				buckets[d] = []
+			(buckets[d] as Array).append(Vector2i(dx, dy))
+	var distances: Array = buckets.keys()
+	distances.sort()
+	for d in distances:
+		order.append_array(buckets[d])
+	_ring_orders[radius] = order
+	return order
 
 
 func _update_subscription(delta: float) -> void:
 	var center := chunk_of(_focus)
-	# The wanted list only changes with the focus's chunk or the view radius: sorting its 441
-	# chunks every frame cost about a millisecond.
+	# The wanted list only changes with the focus's chunk or the view radius.
 	if center != _wanted_center or view_radius != _wanted_radius:
 		if center != _wanted_center:
 			_moved_msec = Time.get_ticks_msec()
 		_wanted_center = center
 		_wanted_radius = view_radius
 		_wanted = []
-		for dy in range(-view_radius, view_radius + 1):
-			for dx in range(-view_radius, view_radius + 1):
-				_wanted.append(center + Vector2i(dx, dy))
-		var nearer := func(a: Vector2i, b: Vector2i) -> bool:
-			return (a - center).length_squared() < (b - center).length_squared()
-		_wanted.sort_custom(nearer)
+		for offset: Vector2i in ring_order(view_radius):
+			_wanted.append(center + offset)
+		_wanted_moved = true
 		_stream_timer = STREAM_STEP  # the next step now: the chunks no longer wanted go at once
 	_sub_timer += delta
 	_stream_timer += delta
 	if _stream_timer < STREAM_STEP and _sub_timer < SUBSCRIBE_REFRESH:
 		return
 	_stream_timer = 0.0
-	var asked := {}
-	for c in _subscribed:
-		asked[c] = true
 	# What was asked for and is still wanted stays; then the nearest of the rest, while fewer than
-	# the allowance are still on their way (not arrived or not drawn yet).
-	var list: Array = []
-	var coming := 0
-	for c in _wanted:
-		if asked.has(c):
-			list.append(c)
-			if not _drawn(c):
-				coming += 1
+	# the allowance are on their way (asked for, not drawn yet). Worked out again only when the
+	# focus crossed a chunk edge, a chunk can be added or the subscription is resent: most steps
+	# while walking have nothing to do.
 	var allowed := STREAM_MOVING if Time.get_ticks_msec() - _moved_msec < MOVING_FOR * 1000.0 else STREAM_STILL
-	if coming < allowed:
-		for c in _wanted:
-			if coming >= allowed:
-				break
-			if asked.has(c):
-				continue
+	for c in _coming.keys():
+		if _drawn(c) or absi(c.x - center.x) > view_radius or absi(c.y - center.y) > view_radius:
+			_coming.erase(c)  # drawn, or no longer wanted (it goes below)
+	var refresh := _sub_timer >= SUBSCRIBE_REFRESH
+	if not (_wanted_moved or refresh or (_coming.size() < allowed and _subscribed.size() < _wanted.size())):
+		return
+	_wanted_moved = false
+	# One pass in the wanted list's order, so the list comes out nearest first (the mod sends
+	# chunks in this order).
+	var list: Array = []
+	var keep := {}
+	for c in _wanted:
+		if _asked.has(c):
 			list.append(c)
-			coming += 1
+			keep[c] = true
+		elif _coming.size() < allowed:
+			list.append(c)
+			keep[c] = true
+			_coming[c] = true
 			if not chunks.has(c):
 				var cv := ChunkView.new()
 				cv.coord = c
@@ -746,17 +923,16 @@ func _update_subscription(delta: float) -> void:
 				ChunkView.count("new_chunk")
 				add_child(cv)
 				chunks[c] = cv
-	var keep := {}
-	for c in list:
-		keep[c] = true
+	# Chunks no longer wanted leave at once; their records and nodes go over the next frames
+	# (_free_unloaded).
 	for c in chunks.keys():
 		if not keep.has(c):
 			_unload(c)
-	if list.size() != _subscribed.size() or _sub_timer >= SUBSCRIBE_REFRESH or list != _subscribed:
-		# In the wanted list's order (nearest first): the mod sends them in this order.
-		var nearer := func(a: Vector2i, b: Vector2i) -> bool:
-			return (a - center).length_squared() < (b - center).length_squared()
-		list.sort_custom(nearer)
+	for c in _coming.keys():
+		if not keep.has(c):
+			_coming.erase(c)
+	_asked = keep
+	if refresh or list != _subscribed:
 		_sub_timer = 0.0
 		_subscribed = list
 		var out: Array = []
@@ -774,34 +950,87 @@ func redraw(c: Vector2i) -> void:
 ## Whether a chunk asked for has arrived and is drawn (its ground, and its buildings built).
 func _drawn(c: Vector2i) -> bool:
 	var cv: ChunkView = chunks.get(c)
-	return cv != null and cv.loaded and cv.has_ground() and not _dirty.has(c) and not _pending.has(c)
+	return cv != null and cv.loaded and cv.has_ground() and not _dirty.has(c) and not _pending.has(c) and not _partial.has(c)
 
 
 func _unload(c: Vector2i) -> void:
 	var cv: ChunkView = chunks[c]
 	ChunkView.count("unload")
-	for key in cv.entities.keys():
-		entities.erase(key)
 	chunks.erase(c)
 	_dirty.erase(c)
 	_pending.erase(c)
+	_partial.erase(c)
 	_dirty_terrain.erase(c)
 	_waiting_gfx.erase(c)
-	# Freed within a time budget (_free_unloaded): walking over a chunk's edge lets a whole row of
-	# 21 go at once, about 0.4 ms each on a busy base. Until then it stays drawn past the view's edge.
+	# Its records leave `entities`, entities_changed goes out and it is freed within a time budget
+	# (_free_unloaded): walking over a chunk's edge lets a whole row of 29 go at once, and a busy
+	# chunk's thousands of records and 60-150 nodes took 1.5-5 ms each. Until then it stays drawn
+	# past the view's edge.
+	_unload_keys[cv] = [cv.entities.keys(), 0]
 	_unloaded.append(cv)
-	entities_changed.emit(c)
 
 
+## Unloaded chunks waiting for their records to leave `entities`: ChunkView -> [keys, next].
+var _unload_keys := {}
+
+
+## Takes unloaded chunks apart within UNLOAD_USEC a frame (at least one step): their records out of
+## `entities` (only those still theirs: the chunk may have come back meanwhile), entities_changed,
+## then their nodes one by one (a busy chunk's took up to 5 ms freed at once), then the chunk.
 func _free_unloaded() -> void:
+	if _unloaded.is_empty():
+		FrameBudget.waiting(&"unload", 0)
+		return
 	var t0 := Time.get_ticks_usec()
-	while not _unloaded.is_empty():
-		var cv: ChunkView = _unloaded.pop_front()
-		if is_instance_valid(cv):
-			cv.free()
-		if Time.get_ticks_usec() - t0 > UNLOAD_USEC:
+	var steps := 0
+	var allow := FrameBudget.grant(&"unload")
+	while allow > 0 and not _unloaded.is_empty():
+		if steps > 0 and Time.get_ticks_usec() - t0 > allow:
 			break
+		var cv: ChunkView = _unloaded[0]
+		if not is_instance_valid(cv):
+			_unloaded.pop_front()
+			_unload_keys.erase(cv)
+			continue
+		var job: Array = _unload_keys.get(cv, [])
+		if not job.is_empty():
+			var keys: Array = job[0]
+			var i := int(job[1])
+			while i < keys.size():
+				var key = keys[i]
+				if entities.get(key) == cv.entities.get(key):
+					entities.erase(key)
+				i += 1
+				steps += 1
+				if (i & 63) == 0 and Time.get_ticks_usec() - t0 > allow:
+					break
+			if i < keys.size():
+				job[1] = i
+				break
+			_unload_keys.erase(cv)
+			entities_changed.emit(cv.coord)
+			steps += 1
+			continue
+		if cv.visible:
+			cv.visible = false
+		var n := cv.get_child_count()
+		if n > 0:
+			cv.get_child(n - 1).free()
+		else:
+			_unloaded.pop_front()
+			cv.free()
+		steps += 1
 	_prof("unload_free", t0)
+	FrameBudget.spent(&"unload", Time.get_ticks_usec() - t0, _unloaded.size())
+
+
+## How much streaming work waits (for --stutter-probe): chunks part-way through a build, chunks
+## whose shadow settings are still to be set, unloaded chunks' records still to go.
+func stream_queues() -> Dictionary:
+	var records := 0
+	for job: Array in _unload_keys.values():
+		records += (job[0] as Array).size() - int(job[1])
+	return {"partial": _partial.size(), "shadow": maxi(_shadow_todo.size() - _shadow_next, 0), "free_records": records}
 
 
 ## How far from the camera the mod streams moving things and machine states (the "Entity distance"
@@ -854,7 +1083,17 @@ func _rebuild_dirty() -> void:
 	_prof("terrain_start", tp)
 	var center := chunk_of(_focus)
 	var nearer := func(a: Vector2i, b: Vector2i) -> bool: return (a - center).length_squared() < (b - center).length_squared()
-	var surfaces := ChunkView.Budget.new(NEW_SURFACES)
+	# One budget object, filled again each frame: a build part-way through holds on to it.
+	var surfaces := _surfaces
+	surfaces.left = NEW_SURFACES
+	var build_t0 := Time.get_ticks_usec()
+	if _dirty.is_empty() and _partial.is_empty() and _pending.is_empty():
+		FrameBudget.waiting(&"build", 0)
+		return
+	var granted := FrameBudget.grant(&"build")
+	if FrameBudget.shared and granted <= 0:
+		FrameBudget.spent(&"build", 0, _dirty.size() + _partial.size() + _pending.size())
+		return
 	# Chunks already built go on adding what they left for later first, nearest first.
 	if not _pending.is_empty():
 		tp = Time.get_ticks_usec()
@@ -864,39 +1103,92 @@ func _rebuild_dirty() -> void:
 			if surfaces.left <= 0:
 				break
 			var pcv: ChunkView = chunks.get(c)
+			if pcv != null and pcv.building:
+				continue
 			if pcv == null or pcv.add_pending(working, animator, surfaces):
 				_pending.erase(c)
 		_prof("pending", tp)
+	# The time for builds starts after the MultiMeshes left for later were added (as before).
+	var started := Time.get_ticks_usec()
+	var allowed := clampi(FRAME_WORK_USEC - Bridge.frame_handle_usec, REBUILD_MIN_USEC, REBUILD_USEC)
+	# Builds stop part-way at the deadline instead of finishing a busy chunk whatever it costs (10-24
+	# ms), so when chunks queue up they get the whole REBUILD_USEC: as many built as before, in frames
+	# of a bounded length.
+	if _dirty.size() + _partial.size() > REBUILDS_PER_FRAME:
+		allowed = REBUILD_USEC
+	# With the frame's work shared (frame_budget.gd) the builds take what the scheduler gives them,
+	# and nothing at all when it gives nothing.
+	if FrameBudget.shared:
+		allowed = granted - (started - build_t0)
+		if allowed <= 0:
+			FrameBudget.spent(&"build", Time.get_ticks_usec() - build_t0, _dirty.size() + _partial.size() + _pending.size())
+			return
+	var until := started + allowed
 	var budget := REBUILDS_PER_FRAME
+	# Builds part-way through carry on first, nearest first.
+	if not _partial.is_empty():
+		var order: Array = _partial.keys()
+		order.sort_custom(nearer)
+		for c: Vector2i in order:
+			if budget < REBUILDS_PER_FRAME and Time.get_ticks_usec() > until:
+				break
+			var bcv: ChunkView = chunks.get(c)
+			if bcv == null or not bcv.building:
+				_partial.erase(c)
+				continue
+			var tb := Time.get_ticks_usec()
+			bcv.resume_build(until)
+			budget -= 1
+			if bcv.building:
+				_prof("build", tb)
+			else:
+				_partial.erase(c)
+				_built(c, bcv, tb)
 	var waiting: Array = _dirty.keys()
 	if waiting.size() > budget:
 		# Nearest the focus first, so after a jump the buildings round the character come first.
 		waiting.sort_custom(nearer)
-	var started := Time.get_ticks_usec()
-	var allowed := clampi(FRAME_WORK_USEC - Bridge.frame_handle_usec, REBUILD_MIN_USEC, REBUILD_USEC)
 	for c in waiting:
-		if budget <= 0 or (budget < REBUILDS_PER_FRAME and Time.get_ticks_usec() - started > allowed):
+		if budget <= 0 or (budget < REBUILDS_PER_FRAME and Time.get_ticks_usec() > until):
 			break
 		# Building more now would only queue more for the renderer: wait for the next frame.
 		if surfaces.left <= 0:
 			break
 		var cv: ChunkView = chunks.get(c)
 		if cv != null:
+			if cv.building:
+				continue  # built again once the build part-way through is done (it stays dirty)
 			var t0 := Time.get_ticks_usec()
-			cv.build_entities(protos, working, animator, surfaces)
-			if cv.pending.is_empty():
-				_pending.erase(c)
-			else:
-				_pending[c] = true
+			# Stops part-way at the frame's deadline and carries on next frame (_partial).
+			cv.build_entities(protos, working, animator, surfaces, until)
 			ChunkView.count("rebuilds")
-			_prof("build", t0)
-			var te := Time.get_ticks_usec()
-			entities_changed.emit(c)
-			_prof("changed_signal", te)
-			entity_build_usec += Time.get_ticks_usec() - t0
-			entity_builds += 1
 			budget -= 1
+			if cv.building:
+				_partial[c] = true
+				_pending.erase(c)
+				_prof("build", t0)
+			else:
+				_built(c, cv, t0)
 		_dirty.erase(c)
+	FrameBudget.spent(&"build", Time.get_ticks_usec() - build_t0, _dirty.size() + _partial.size() + _pending.size())
+
+
+var _surfaces := ChunkView.Budget.new(NEW_SURFACES)
+var _partial := {}  # Vector2i -> true: chunks whose build stopped part-way (ChunkView.building)
+
+
+## A chunk's build is done (started at `t0`, its last part this frame).
+func _built(c: Vector2i, cv: ChunkView, t0: int) -> void:
+	if cv.pending.is_empty():
+		_pending.erase(c)
+	else:
+		_pending[c] = true
+	_prof("build", t0)
+	var te := Time.get_ticks_usec()
+	entities_changed.emit(c)
+	_prof("changed_signal", te)
+	entity_build_usec += Time.get_ticks_usec() - t0
+	entity_builds += 1
 
 
 # How tall the tallest things are, for how far their shadows reach (a rocket silo's top; trees
@@ -927,24 +1219,69 @@ func _update_shadow_casters() -> void:
 		var basis := cam.global_basis
 		key.append_array([(cam.global_position / (SHADOW_SLACK * 0.5)).round(), (basis.z * 50.0).round(), (basis.x * 50.0).round(),
 			roundi(cam.fov), roundi(cam.size), cam.projection, ((-sun.global_basis.z) * 20.0).round(), sun.directional_shadow_max_distance])
-	if key == _shadow_key:
+	if key != _shadow_key:
+		_shadow_key = key
+		# Gone through over the next frames (SHADOW_USEC a frame): when the focus crosses a chunk
+		# edge every chunk's tier is looked at, and those that change set their MultiMeshes' shadow
+		# casting, which made 4-13 ms frames while walking (docs/PERFORMANCE-AUDIT.md 4.7). A new
+		# chunk casts from the start (SHADOWS_NEAR), so nothing waits for its shadow.
+		_shadow_on = on
+		_shadow_hull = shadow_region(cam, sun) if on else PackedVector2Array()
+		_shadow_rows = {}
+		_shadow_center = chunk_of(_focus)
+		# A pass cut short by a new one goes on where it was, so the view moving every few frames
+		# doesn't leave the same chunks always last.
+		var at := _shadow_start + _shadow_next if _shadow_next < _shadow_todo.size() else 0
+		_shadow_todo = chunks.values()
+		_shadow_start = at % maxi(_shadow_todo.size(), 1)
+		_shadow_next = 0
+		_shadow_count = 0
+	if _shadow_next >= _shadow_todo.size():
+		FrameBudget.waiting(&"shadows", 0)
 		return
-	_shadow_key = key
-	var hull := shadow_region(cam, sun) if on else PackedVector2Array()
-	var center := chunk_of(_focus)
-	var n := 0
-	for cv: ChunkView in chunks.values():
+	var size := _shadow_todo.size()
+	var did := 0
+	# Tests lift shadow_usec to set every chunk at once.
+	var from_budget := shadow_usec == SHADOW_USEC
+	var allow := FrameBudget.grant(&"shadows") if from_budget else shadow_usec
+	var t0 := Time.get_ticks_usec()
+	while not (from_budget and allow <= 0) and _shadow_next < size:
+		if did > 0 and Time.get_ticks_usec() - t0 > allow:
+			break
+		var cv = _shadow_todo[(_shadow_start + _shadow_next) % size]
+		_shadow_next += 1
+		did += 1
+		if not is_instance_valid(cv) or chunks.get(cv.coord) != cv:
+			continue
 		var tier := ChunkView.SHADOWS_NEAR
-		if on:
-			var ring := maxi(absi(cv.coord.x - center.x), absi(cv.coord.y - center.y))
-			if not _rect_meets_hull(Rect2(Vector2(cv.coord * CHUNK), Vector2(CHUNK, CHUNK)), hull):
+		if _shadow_on:
+			var ring := maxi(absi(cv.coord.x - _shadow_center.x), absi(cv.coord.y - _shadow_center.y))
+			if not _chunk_meets_hull(cv.coord):
 				tier = ChunkView.SHADOWS_NONE
 			elif ring > NEAR_SHADOW_RINGS:
 				tier = ChunkView.SHADOWS_FAR
-		cv.set_shadow_tier(tier)
+		(cv as ChunkView).set_shadow_tier(tier)
 		if tier != ChunkView.SHADOWS_NONE:
-			n += 1
-	shadow_casters = n
+			_shadow_count += 1
+	if _shadow_next >= size:
+		shadow_casters = _shadow_count
+		_shadow_todo = []
+		_shadow_next = 0
+		_shadow_start = 0
+	FrameBudget.spent(&"shadows", Time.get_ticks_usec() - t0, maxi(_shadow_todo.size() - _shadow_next, 0))
+
+
+# Main-thread time a frame for setting chunks' shadow tiers (at least one chunk).
+const SHADOW_USEC := 1000
+var shadow_usec := SHADOW_USEC  # tests lift it to set every chunk at once
+var _shadow_on := false
+var _shadow_hull := PackedVector2Array()
+var _shadow_rows := {}  # chunk row -> hull_row() of _shadow_hull
+var _shadow_center := Vector2i.ZERO
+var _shadow_todo: Array = []  # chunks still to set, in no particular order
+var _shadow_next := 0  # how many of _shadow_todo are done, from _shadow_start round
+var _shadow_start := 0
+var _shadow_count := 0
 
 
 ## The ground (x, z in tiles) whose casters can throw a shadow into what the camera sees within
@@ -996,6 +1333,40 @@ static func _rect_meets_hull(rect: Rect2, hull: PackedVector2Array) -> bool:
 		if outside:
 			return false
 	return true
+
+
+## Whether chunk `c` meets the shadow region (_rect_meets_hull's answer): the region's extent along
+## each row of chunks is worked out once a pass, so each chunk is one comparison. The hull test for
+## each of ~800 chunks was most of the shadow pass's time.
+func _chunk_meets_hull(c: Vector2i) -> bool:
+	var row: Vector2 = _shadow_rows.get(c.y, Vector2.INF)
+	if row == Vector2.INF:
+		row = hull_row(_shadow_hull, float(c.y * CHUNK), float(c.y * CHUNK + CHUNK))
+		_shadow_rows[c.y] = row
+	return row.x <= float(c.x * CHUNK + CHUNK) and row.y >= float(c.x * CHUNK)
+
+
+## How far a convex polygon (Geometry2D.convex_hull's, closed) reaches along x between y0 and y1:
+## (min x, max x), or (INF, -INF) where it doesn't reach. A rectangle spanning y0..y1 meets the
+## polygon exactly when its x range overlaps this (the polygon's slice of the band is convex).
+static func hull_row(hull: PackedVector2Array, y0: float, y1: float) -> Vector2:
+	var lo := INF
+	var hi := -INF
+	if hull.size() < 4:
+		return Vector2(lo, hi)
+	for i in hull.size() - 1:
+		var a := hull[i]
+		var b := hull[i + 1]
+		if maxf(a.y, b.y) < y0 or minf(a.y, b.y) > y1:
+			continue
+		var xa := a.x
+		var xb := b.x
+		if a.y != b.y:
+			xa = lerpf(a.x, b.x, clampf((y0 - a.y) / (b.y - a.y), 0.0, 1.0))
+			xb = lerpf(a.x, b.x, clampf((y1 - a.y) / (b.y - a.y), 0.0, 1.0))
+		lo = minf(lo, minf(xa, xb))
+		hi = maxf(hi, maxf(xa, xb))
+	return Vector2(lo, hi)
 
 
 func terrain_queue_size() -> int:
@@ -1056,9 +1427,13 @@ func _start_terrain_jobs() -> void:
 
 ## Shows the terrain jobs that are done, within a time budget.
 func _finish_terrain_jobs() -> void:
+	if _terrain_jobs.is_empty():
+		FrameBudget.waiting(&"terrain", 0)
+		return
 	var t0 := Time.get_ticks_usec()
+	var allow := FrameBudget.grant(&"terrain")
 	for c: Vector2i in _terrain_jobs.keys():
-		if Time.get_ticks_usec() - t0 > TERRAIN_APPLY_USEC:
+		if allow <= 0 or Time.get_ticks_usec() - t0 > allow:
 			break
 		var entry: Array = _terrain_jobs[c]
 		if not WorkerThreadPool.is_task_completed(entry[0]):
@@ -1084,6 +1459,11 @@ func _finish_terrain_jobs() -> void:
 				_dirty_terrain[c] = true  # ready already
 				_waiting_gfx.erase(c)
 				break
+	var done := 0
+	for entry: Array in _terrain_jobs.values():
+		if WorkerThreadPool.is_task_completed(entry[0]):
+			done += 1
+	FrameBudget.spent(&"terrain", Time.get_ticks_usec() - t0, done)
 
 
 func _exit_tree() -> void:
@@ -1201,16 +1581,19 @@ func _pick_grid(cv: ChunkView) -> Dictionary:
 	if frame != _pick_frame:
 		_pick_frame = frame
 		_pick_spent = 0
+		_pick_allow = FrameBudget.grant(&"pick")
 	var started := Time.get_ticks_usec()
 	var grid: Dictionary = cv.pick_grid[1]
 	var recs: Array = cv.pick_grid[2]
 	var i := int(cv.pick_grid[3])
+	var allow := _pick_allow if pick_build_usec == PICK_BUILD_USEC else pick_build_usec
 	while i < recs.size():
-		if (i & 15) == 0 and _pick_spent + Time.get_ticks_usec() - started > pick_build_usec:
+		if (i & 15) == 0 and _pick_spent + Time.get_ticks_usec() - started > allow:
 			break
 		_index_pick(grid, recs[i])
 		i += 1
 	_pick_spent += Time.get_ticks_usec() - started
+	FrameBudget.spent(&"pick", Time.get_ticks_usec() - started, recs.size() - i)
 	if i >= recs.size():
 		cv.pick_grid = [gen, grid]
 	else:
@@ -1220,6 +1603,7 @@ func _pick_grid(cv: ChunkView) -> Dictionary:
 
 var _pick_frame := -1
 var _pick_spent := 0
+var _pick_allow := PICK_BUILD_USEC
 const PICK_BUILD_USEC := 1500
 var pick_build_usec := PICK_BUILD_USEC  # tests lift it to compare a whole index
 

@@ -111,7 +111,7 @@ func show_entity(r) -> void:
 		return
 	var health := _health_of(r)
 	var working := int(world.working.get(r.unit, -1)) if r.unit > 0 else -1
-	var icon: Array = model.alt_icons.get(r.unit, []) if model != null and r.unit > 0 else []
+	var icon: Array = WorldMirror.alt_icon(r)
 	var inner_name: String = proto.name
 	if proto.type == "entity-ghost" and r.extra.has("gh") and world.protos.entity(int(r.extra["gh"])) != null:
 		inner_name = world.protos.entity(int(r.extra["gh"])).name

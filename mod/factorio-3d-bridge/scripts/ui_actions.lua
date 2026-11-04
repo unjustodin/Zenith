@@ -15,6 +15,7 @@ local tracker = require("scripts.tracker")
 local screens = require("scripts.screens")
 local map = require("scripts.map")
 local history = require("scripts.history")
+local alt_mode = require("scripts.alt_mode")
 
 local M = {}
 
@@ -430,65 +431,9 @@ function M.paste(cmd)
 end
 
 ---------------------------------------------------------------------------------------------
--- Alt-mode (Alt): what each machine near the focus shows over itself
-
-local function signal_name(f)
-  if type(f) ~= "table" then
-    return nil
-  end
-  local name = f.name
-  if type(name) ~= "string" and name ~= nil then -- a prototype (LuaObjects aren't tables)
-    local ok, n = pcall(function() return name.name end)
-    name = ok and n or nil
-  end
-  return type(name) == "string" and name or nil
-end
-
--- Every filter set on the entity, in slot order: Alt-mode shows them all, shrunk to fit.
-local function filter_names(e)
-  local names = {}
-  local ok, n = pcall(function() return e.filter_slot_count end)
-  for i = 1, ok and n or 0 do
-    local ok_f, f = pcall(function() return e.get_filter(i) end)
-    local name = ok_f and signal_name(f)
-    if name then
-      names[#names + 1] = name
-    end
-  end
-  return names
-end
-
--- [icon type, name, more?] for an entity's Alt-mode icon (more: the other filters' item names),
--- or nil.
-local function alt_icon(e)
-  local t = e.type
-  if t == "assembling-machine" or t == "furnace" or t == "rocket-silo" then
-    local ok, recipe = pcall(function() return e.get_recipe() end)
-    -- An idle furnace's previous_recipe isn't shown: with no recipe Factorio shows nothing.
-    if ok and recipe then
-      return { "recipe", recipe.name }
-    end
-  elseif t == "inserter" or t == "loader" or t == "loader-1x1" then
-    local names = filter_names(e)
-    if #names > 0 then
-      local first = table.remove(names, 1)
-      return { "item", first, #names > 0 and names or nil }
-    end
-  elseif t == "splitter" or t == "lane-splitter" then
-    local ok, f = pcall(function() return e.splitter_filter end)
-    local name = ok and signal_name(f)
-    if name then
-      return { "item", name }
-    end
-  elseif t == "logistic-container" or t == "mining-drill" then
-    local ok, f = pcall(function() return e.filter_slot_count > 0 and e.get_filter(1) end)
-    local name = ok and signal_name(f)
-    if name then
-      return { "item", name }
-    end
-  end
-  return nil
-end
+-- Alt-mode (Alt), the old way: what each machine near the focus shows over itself, listed once a
+-- second up to ALT_MAX. Only for clients from before issue #9 (0.1.1), which send `alt`; newer ones
+-- read the icons from the entity records (alt_mode.lua) and never ask.
 
 local ALT_TYPES = {
   "assembling-machine", "furnace", "rocket-silo", "inserter", "loader", "loader-1x1", "splitter",
@@ -529,7 +474,7 @@ function M.tick()
     if #l >= ALT_MAX then
       break
     end
-    local icon = e.unit_number and alt_icon(e)
+    local icon = e.unit_number and alt_mode.icon(e)
     if icon then
       l[#l + 1] = { e.unit_number, icon[1], icon[2], icon[3] }
     end
@@ -805,6 +750,12 @@ local function overlay(proto)
     if ok and r then
       x.mr = math.floor(r * 100 + 0.5) / 100
       x.vp = v and vec(v) or nil
+    end
+  elseif t == "assembling-machine" or t == "furnace" then
+    -- Where a recycler (or any machine putting its results out) drops them: Alt-mode's arrow.
+    local ok, v = pcall(function() return proto.vector_to_place_result end)
+    if ok and v and ((v.x or v[1] or 0) ~= 0 or (v.y or v[2] or 0) ~= 0) then
+      x.vp = vec(v)
     end
   end
   x.fb = fluid_connections(proto)

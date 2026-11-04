@@ -293,12 +293,12 @@ func _graphics() -> void:
 		else:
 			Settings.apply_preset(preset)
 			_open_tab.call_deferred(_tab))
-	_row(grid, "Preset", _preset, "shadows, ambient occlusion, level of detail, view and decorative distances, clouds")
+	_row(grid, "Preset", _preset, "sets the settings below together|Shadows, ambient occlusion, level of detail, the view, entity, belt and decorative distances, decorative density and clouds, from cheapest (Low) to dearest (Ultra). High is the default.")
 	var recommend := MenuKit.button(_recommended if _recommended != "" else "Recommended")
 	recommend.name = "graphics-recommended"
 	recommend.pressed.connect(_recommend.bind(recommend))
 	_row(grid, "For this PC", recommend,
-		"the preset this PC holds at a steady 60 UPS and 60 FPS, with Hold the game at 60 UPS and smooth belt items on; in a game it measures for a few seconds first")
+		"picks a preset for this PC|The preset this PC holds at a steady 60 UPS and 60 FPS, with Hold the game at 60 UPS and smooth belt items on. In a game it measures for a few seconds first.")
 	_dropdown(grid, "Full screen", "graphics", "window_mode", [["Windowed", "windowed"], ["Borderless full screen", "borderless"], ["Exclusive full screen", "fullscreen"]], "", true)
 	var sizes: Array = [["Default (1600 × 900)", ""]]
 	var screen := DisplayServer.screen_get_size()
@@ -325,40 +325,47 @@ func _graphics() -> void:
 		var n := int(v) * 2 + 1
 		return "%d chunks around (%d × %d)" % [int(v), n, n])
 	_slider(grid, "Entity distance", "graphics", "entity_radius", 32, 256, 16, func(v: float) -> String:
-		return "%d tiles" % int(v), false, false, "vehicles, trains, robots, enemies and working machines; the server caps it")
-	_slider(grid, "Belt items in full", "graphics", "belt_near_distance", 8, 96, 8, func(v: float) -> String:
-		return "%d tiles" % int(v), false, false, "every item on belts drawn this far round the character; further costs the server more on busy bases")
-	_slider(grid, "Belt items far away", "graphics", "belt_far_distance", 0, 640, 32, func(v: float) -> String:
-		return "Off" if int(v) == 0 else "%d tiles" % int(v), false, false, "past the nearby items, each belt lane shows an icon of what it carries")
+		return "%d tiles" % int(v), false, false, "moving things and machine states|Vehicles, trains, robots, enemies and working machines are drawn this far round the character. The server can cap it (its Max live-update radius).")
+	_slider(grid, "Belt item distance", "graphics", "belt_distance", 0, 640, 32, func(v: float) -> String:
+		return "Off" if int(v) == 0 else "%d tiles" % int(v), false, false,
+		"how far items on belts show|Items on belts are drawn this far: moving near the character (as many as Belt updates allows), and past that each lane as icons of what it carries.")
+	_dropdown(grid, "Belt updates", "graphics", "belt_updates",
+		[["1,000 items", 1000], ["2,000 items", 2000], ["4,000 items", 4000], ["6,000 items", 6000], ["12,000 items", 12000],
+		["24,000 items", 24000], ["Unlimited", 0]],
+		"how many belt items move|The most items on belts the server sends moving each update, counted from the character outwards (empty belts count a little too). Unlimited moves every item within the Belt item distance, which costs the server most on a busy base.")
 	_check(grid, "Smooth belt items", "graphics", "belt_smooth",
-		"on: items on belts update five times a second and follow curves; off: on a busy base the server reads them a little each tick and they update less often (lighter for the server, but items can cut across curves)")
+		"items follow curves smoothly|On: items on belts update five times a second and follow curves. Off: on a busy base the server reads them a little each tick and they update less often, which is lighter for the server.")
 	_check(grid, "Hold the game at 60 UPS", "graphics", "hold_ups",
-		"while the game runs slow, the distances above, the minimap's refreshes and the frame rate go lower for a while (the F4 line says what); your settings stay as they are")
+		"eases off when the game slows|While the game runs under 60 UPS, the bridge's updates, the distances above, the minimap's refreshes and then the frame rate go lower for a while (the F4 line says what). Your settings stay as they are.")
 	_check(grid, "Show all smoke and particles", "graphics", "effects", "smoke, dust, flashes, explosions, corpses")
-	_dropdown(grid, "Items on belts", "graphics", "item_models", [["3D models", true], ["Icons", false]], "also on the ground and in inserter hands; items without a model show their icon")
-	_check(grid, "Clouds", "graphics", "clouds", "clouds in the sky, their shadows drifting over the ground, and haze")
-	_check(grid, "Decoratives", "graphics", "decoratives", "grass, flowers and small rocks on the ground, from Factorio's pictures")
+	_dropdown(grid, "Items on belts", "graphics", "item_models", [["3D models", true], ["Icons", false]], "also on the ground and in hands|The same look for items on the ground and in inserter hands. Items without a model show their icon.")
+	_check(grid, "Clouds", "graphics", "clouds", "clouds, their shadows and haze")
+	_check(grid, "Decoratives", "graphics", "decoratives", "grass, flowers and small rocks|Grass, flowers and small rocks on the ground, from Factorio's own pictures.")
 	_slider(grid, "Decorative density", "graphics", "decorative_density", 0.1, 1.0, 0.05, func(v: float) -> String: return "%d%%" % roundi(v * 100.0))
 	_slider(grid, "Decorative distance", "graphics", "decorative_distance", 64, 320, 16, func(v: float) -> String:
-		return "%d tiles" % int(v), false, false, "full detail to 80 tiles, then thinner further out")
-	_check(grid, "Item icons on belts and the ground", "graphics", "item_icons", "Factorio's icons; off: coloured blocks. From the next connection")
+		return "%d tiles" % int(v), false, false, "thinner further out|Full detail to 80 tiles, then half and a quarter further out.")
+	_check(grid, "Item icons on belts and the ground", "graphics", "item_icons", "Factorio's icons, or coloured blocks|Off draws coloured blocks instead. Applies from the next connection.")
 	_dropdown(grid, "Model look", "graphics", "model_look", [["Factorio colours", "colours"],
-		["Factorio sprite projected", "sprite"]], "each part in its colour from the game's sprite, or the sprite painted on; after a restart")
+		["Factorio sprite projected", "sprite"]], "colours, or the sprite painted on|Each part in its colour from the game's sprite, or the sprite projected onto the model. After a restart.")
 
 	_heading("Advanced")
 	grid = _grid()
 	_dropdown(grid, "Anti-aliasing", "graphics", "antialiasing", [["Off", "off"], ["FXAA", "fxaa"], ["TAA", "taa"], ["MSAA 2×", "msaa2"], ["MSAA 4×", "msaa4"], ["MSAA 8×", "msaa8"]], "", true)
 	_dropdown(grid, "Shadows", "graphics", "shadows", [["Off", "off"], ["Low", "low"], ["Medium", "medium"], ["High", "high"], ["Ultra", "ultra"]],
-		"how far shadows reach past what you see, how sharp and how many passes draw them")
+		"how sharp shadows are|How sharp shadows are, how far they reach past what you see (unless Shadow distance says otherwise) and how many passes draw them.")
+	_dropdown(grid, "Shadow distance", "graphics", "shadow_distance",
+		[["Automatic", 0], ["60 tiles", 60], ["100 tiles", 100], ["150 tiles", 150], ["200 tiles", 200], ["300 tiles", 300], ["400 tiles", 400]],
+		"how far shadows reach|The furthest shadows reach from the camera. Automatic: as the Shadows quality sets it, 80 to 200 tiles. Further shows them when zoomed out, softer and costing more.")
 	_dropdown(grid, "Level of detail", "graphics", "lod_quality", [["Low", "low"], ["Medium", "medium"], ["High", "high"]],
-		"how soon models far away and their shadows are drawn simpler; those near you stay whole")
+		"simpler models far away|How soon models far away, and their shadows, are drawn simpler. Those near you stay whole.")
 	_check(grid, "Merge far buildings", "graphics", "merge_far",
-		"past about four chunks from the camera, each chunk's buildings are drawn as one simplified mesh, still and without their own shadows: far fewer draws at long view distances")
+		"far chunks as one mesh|Past about four chunks from the camera, each chunk's buildings are drawn as one simplified mesh, still and without their own shadows: far fewer draws at long view distances.")
 	_check(grid, "Merged materials (may help when CPU-bound)", "graphics", "merged_materials",
-		"each model drawn as one surface with one material: fewer draws and less CPU for the renderer, a little more GPU time. After a restart")
-	_check(grid, "Ambient occlusion (SSAO)", "graphics", "ssao")
+		"less CPU, a little more GPU|Each model drawn as one surface with one material: fewer draws and less CPU for the renderer, a little more GPU time. After a restart.")
+	_check(grid, "Ambient occlusion (WIP, high GPU cost)", "graphics", "ssao",
+		"shading in corners; costly|SSAO, off by default: it makes the depth pre-pass shade every pixel twice, about 6-7 ms of GPU a frame at a busy base, for a small difference in look.")
 	_check(grid, "Render on a separate thread", "graphics", "render_thread",
-		"experimental (Godot): may help on some PCs, can hang on quitting; off is the stable choice. After a restart")
+		"experimental|Godot's own experimental mode: it may help on some PCs and can hang on quitting. Off is the stable choice. After a restart.")
 
 	_heading("Accessibility")
 	grid = _grid()
@@ -498,11 +505,13 @@ func _interface() -> void:
 	var grid := _grid()
 	_ui_check(grid, "Show minimap", "map/minimap", "M opens the map")
 	_check(grid, "Show mouse and keyboard control hints", "interface", "show_help", "F1; the client's help panel, hidden while a window is open")
-	_check(grid, "Fade tall entities in the way", "interface", "hide_tall", "buildings and trees taller than 2 tiles between the camera and the character or cursor fade out; the shortcut bar toggles it too")
 
 	_heading("Alt-mode")
 	grid = _grid()
 	_check(grid, "Alt-mode", "interface", "alt_mode", "Alt toggles it; kept between games")
+	_check(grid, "Show inserter arrows in \"Alt-mode\"", "interface", "alt_inserter_arrows", "where each inserter picks up and drops")
+	_check(grid, "Show pump arrows in \"Alt-mode\"", "interface", "alt_pump_arrows", "the way each pump moves its fluid")
+	_check(grid, "Show machine arrows in \"Alt-mode\"", "interface", "alt_machine_arrows", "machines' fluid inputs and outputs, a recycler's output side")
 
 	_heading("Interaction")
 	grid = _grid()
@@ -610,6 +619,8 @@ func _camera() -> void:
 	_slider(grid, "Zoom out to the map at", "camera", "map_zoom_out", 80.0, 480.0, 10.0, func(v: float) -> String: return "%d tiles" % int(v), false, false, "the view zoomed in from the map goes back to the map when zoomed out this far; the default is 240")
 	_slider(grid, "Mouse sensitivity", "camera", "look_sensitivity", 0.25, 3.0, 0.05, func(v: float) -> String: return "%.2f×" % v)
 	_check(grid, "Invert mouse look", "camera", "invert_y", "first person and middle-drag tilt")
+	_check(grid, "Camera follows the hills", "camera", "follow_hills",
+		"with a hills add-on|Off (the default): the camera stays level as you walk over an add-on's hills, and only first person rides them. On: it rises and falls with the ground under the character.")
 
 
 func _factorio() -> void:
@@ -697,10 +708,21 @@ func _row(grid: GridContainer, text: String, control: Control, note := "") -> vo
 	grid.add_child(holder)
 	if note == "":
 		return
-	var n := Kit.label(note)
+	# "short|full": the short line shows, and a (?) after it gives the full text when hovered (owner).
+	var short := note.get_slice("|", 0).strip_edges()
+	var full := note.get_slice("|", 1).strip_edges() if note.contains("|") else ""
+	var n := Kit.label(short)
 	n.add_theme_color_override("font_color", Kit.DISABLED_TEXT)
 	n.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	holder.add_child(n)
+	if full != "":
+		var more := Kit.label("(?)")
+		more.name = "more"
+		more.tooltip_text = full
+		more.mouse_filter = Control.MOUSE_FILTER_STOP
+		more.mouse_default_cursor_shape = Control.CURSOR_HELP
+		more.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		holder.add_child(more)
 
 
 func _note(text: String) -> void:

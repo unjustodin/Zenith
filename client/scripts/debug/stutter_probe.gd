@@ -20,7 +20,14 @@ var _shots_dir: String = Settings.arg_value("--probe-shots=") if Settings.has_ar
 const ROUTES := {
 	"busy": [[8, 28.0], [4, 12.0], [0, 20.0]],
 	"short": [[8, 6.0]],
+	# Two laps of a loop round where it joined, at whatever speed the character runs: on the owner's
+	# save its exoskeletons take it about 30 tiles a second (0.51 a tick), so each lap crosses
+	# 150-300 tiles of the base each way and new chunks come in all the time ("While moving",
+	# docs/PERFORMANCE-AUDIT.md).
+	"fast": [[4, 5.0], [8, 3.0], [12, 10.0], [0, 6.0], [4, 10.0], [8, 3.0], [12, 5.0],
+		[4, 5.0], [8, 3.0], [12, 10.0], [0, 6.0], [4, 10.0], [8, 3.0], [12, 5.0]],
 	"stand": [[-1, 30.0]],  # stands where it joined: the steady cost of a busy view
+	"stand75": [[-1, 75.0]],  # the same for longer (docs/PERFORMANCE-AUDIT.md: averages over a minute or more)
 	"fight": [[-1, 150.0]],  # stands while tools/attack_wave.py sends enemies at a defended wall
 	"variants": [[-1, 7200.0]],  # stands until --probe-variants has gone through its list
 }
@@ -37,7 +44,9 @@ var _warm := 0.0
 var _last_usec := 0
 ## Per frame: [ms, model ms, lods ms, rebuild ms, terrain ms, handle ms, render cpu ms, gpu ms,
 ## models made, x, y, tick, all _process ms, physics ms, {node: _process ms}, GPU pipelines compiled,
-## draw calls, primitives, {what is alive: count} (fights: creatures, corpses, effect cards, sounds)]
+## draw calls, primitives, {what is alive: count} (fights: creatures, corpses, effect cards, sounds),
+## {phase: ms}, [view and shadow draws and primitives], and with --gpu-profile {render step: GPU ms},
+## {render step: CPU ms} (_pass_times)]
 var _frames: Array = []
 var _load_frames: Array = []  # the same, for the first WARMUP seconds after the world is ready
 var _before := {}
@@ -131,6 +140,7 @@ func _ready() -> void:
 
 
 func _add_marks() -> void:
+	world.track_latency = true
 	var game: Node = world.get_parent()
 	for parent in [game.get_parent(), game]:
 		for child in parent.get_children():
@@ -148,12 +158,20 @@ func _add_marks() -> void:
 			world.add_child(before)
 			world.move_child(before, child.get_index())
 			before.process_priority = 0
-			_marks.append([before, "World"])
+			_marks.append([before, "World itself"])  # world.gd and its children before the animator
 			var mark := FrameStart.new()
 			world.add_child(mark)
 			world.move_child(mark, child.get_index() + 1)
 			mark.process_priority = 0
 			_marks.append([mark, "Animator"])  # world.gd's own _process runs before its children
+	# Scripts that run after every priority-0 node (fx.gd at 2; sun_shadows.gd and vehicle_anim.gd
+	# at 10): marks between the priorities split them from the rest.
+	for p in [[1, "rest at priority 0"], [3, "fx.gd (priority 2)"], [999, "sun_shadows.gd, vehicle_anim.gd (priority 10)"]]:
+		var late := FrameStart.new()
+		late.name = "StutterMarkLate"
+		add_child(late)
+		late.process_priority = int(p[0])
+		_marks.append([late, str(p[1])])
 	var spec := out_path.split("@")
 	out_path = spec[0]
 	_route = ROUTES.get(spec[1] if spec.size() > 1 else "busy", ROUTES["busy"])
@@ -181,6 +199,8 @@ func _process(delta: float) -> void:
 		_before = c
 		return
 	var walking := _warm >= _warmup and (not _variants or _settled() or _warm > 180.0)
+	if walking and _frames.is_empty():
+		world.drawn_latency.clear()  # what appears while it walks, not while it joined
 	if not walking:
 		_warm += delta
 	elif _leg >= _route.size():
@@ -210,7 +230,7 @@ func _process(delta: float) -> void:
 		c["loads"] - _before["loads"], snappedf(f.x, 0.1), snappedf(f.y, 0.1), Bridge.server_tick,
 		(now - _start.at) / 1000.0, Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0, _segments(),
 		c["pipelines"] - _before["pipelines"], int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
-		int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)), _alive(), _phases(), _passes(vp)])
+		int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)), _alive(), _phases(), _passes(vp)] + _pass_times())
 	_last_usec = now
 	_before = c
 	_end_usec = Time.get_ticks_usec()
@@ -223,6 +243,36 @@ func _passes(vp: RID) -> Array:
 		RenderingServer.viewport_get_render_info(vp, RenderingServer.VIEWPORT_RENDER_INFO_TYPE_VISIBLE, RenderingServer.VIEWPORT_RENDER_INFO_PRIMITIVES_IN_FRAME),
 		RenderingServer.viewport_get_render_info(vp, RenderingServer.VIEWPORT_RENDER_INFO_TYPE_SHADOW, RenderingServer.VIEWPORT_RENDER_INFO_DRAW_CALLS_IN_FRAME),
 		RenderingServer.viewport_get_render_info(vp, RenderingServer.VIEWPORT_RENDER_INFO_TYPE_SHADOW, RenderingServer.VIEWPORT_RENDER_INFO_PRIMITIVES_IN_FRAME)]
+
+
+## With Godot started with --gpu-profile the renderer marks every step of its frame (Godot's own
+## visual profiler reads the same marks): [{step: GPU ms}, {step: render CPU ms}], the step named by
+## the mark that starts it, summed over the frame's viewports; [] without the flag. The marks read
+## are the last frame the GPU finished, a frame or two behind this one.
+var _rd: RenderingDevice
+var _ts_frame := -1
+
+
+func _pass_times() -> Array:
+	if _rd == null:
+		_rd = RenderingServer.get_rendering_device()
+	if _rd == null:
+		return []
+	var n := _rd.get_captured_timestamps_count()
+	if n <= 2 or _rd.get_captured_timestamps_frame() == _ts_frame:
+		return []
+	_ts_frame = _rd.get_captured_timestamps_frame()
+	var gpu := {}
+	var cpu := {}
+	for i in range(1, n):
+		var step := _rd.get_captured_timestamp_name(i - 1)
+		if step.begins_with("vp_"):
+			step = step.get_slice("_", 0) + "_" + step.get_slice("_", 1)
+		var g := (_rd.get_captured_timestamp_gpu_time(i) - _rd.get_captured_timestamp_gpu_time(i - 1)) / 1.0e6  # ns
+		var c := (_rd.get_captured_timestamp_cpu_time(i) - _rd.get_captured_timestamp_cpu_time(i - 1)) / 1.0e3  # µs
+		gpu[step] = snappedf(float(gpu.get(step, 0.0)) + g, 0.001)
+		cpu[step] = snappedf(float(cpu.get(step, 0.0)) + c, 0.001)
+	return [gpu, cpu]
 
 
 ## Whether the world has nothing left to build: chunks, their MultiMeshes, terrain.
@@ -254,7 +304,19 @@ func _phases() -> Dictionary:
 			wants += cv.pending.size()
 	out["q_wants"] = wants
 	out["q_terrain"] = world.terrain_queue_size()
+	# Chunk streaming (world.gd): chunks wanted round the focus but not asked for yet, chunks
+	# waiting to be freed, and (when world.gd has them) the queues of its spread-out work.
+	out["q_unasked"] = maxi(world._wanted.size() - world._subscribed.size(), 0)
+	out["q_free"] = world._unloaded.size()
+	if world.has_method("stream_queues"):
+		var queues: Dictionary = world.stream_queues()
+		for k in queues:
+			out["q_" + str(k)] = queues[k]
 	out["q_messages"] = Bridge.waiting_count()
+	out["q_undrawn"] = world.undrawn()
+	out["q_near_undrawn"] = world.near_undrawn
+	# The sliced systems' books this frame (frame_budget.gd): {system: [µs used, µs granted, waiting]}.
+	out["fb"] = preload("res://scripts/world/frame_budget.gd").snapshot()
 	var nodes := int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT))
 	out["nodes_delta"] = nodes - _nodes
 	_nodes = nodes
@@ -270,6 +332,9 @@ func _phases() -> Dictionary:
 func _alive() -> Dictionary:
 	var game: Node = world.get_parent()
 	var out := {"nodes": int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT)), "objects": int(Performance.get_monitor(Performance.OBJECT_COUNT))}
+	if _variants and _variant >= 0 and _variant < _variant_list.size():
+		out["variant"] = str(_variant_list[_variant])  # tools/perf_audit.py --variants splits the frames by it
+		out["settled"] = _variant_time > VARIANT_SETTLE * (4.0 if str(_variant_list[_variant]).begins_with("preset") else 1.0)
 	# Far chunks merged and their triangles (far_chunks.gd), looked at once a second.
 	if Engine.get_process_frames() % 60 == 0 or _merged.is_empty():
 		_merged = world.far_chunks.census()
@@ -537,6 +602,27 @@ func _set_variant(name: String, on: bool) -> void:
 			sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS if on else int(_base["mode"])
 		"hard shadows":
 			RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_HARD if on else int(_base["soft"]))
+		# Godot's depth pre-pass, where nothing forces it (SSAO does). Measures nothing useful: in a
+		# running game it stops the terrain and models being drawn at all (seen in 4.7.2); set
+		# rendering/driver/depth_prepass/enable in an override.cfg for a whole run instead.
+		"prepass off":
+			ProjectSettings.set_setting("rendering/driver/depth_prepass/enable", not on)
+		"render scale 0.5":  # half the pixels each way: what scales with pixels, not vertices
+			get_viewport().scaling_3d_scale = 0.5 if on else 1.0
+		"fxaa off":
+			get_viewport().screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED if on else Viewport.SCREEN_SPACE_AA_FXAA
+		"clouds off":
+			Settings.set_value("graphics", "clouds", not on, false)
+		"minimap hidden", "alerts hidden", "quickbar hidden", "entity info hidden":
+			var script_name: String = {"minimap hidden": "minimap.gd", "alerts hidden": "alerts.gd", "quickbar hidden": "quickbar.gd",
+				"entity info hidden": "entity_info.gd"}[name]
+			for c in get_tree().root.find_children("*", "CanvasItem", true, false):
+				var sc: Script = c.get_script()
+				if sc != null and sc.resource_path.get_file() == script_name:
+					(c as CanvasItem).visible = not on
+		"ui hidden":
+			for c in get_tree().root.find_children("*", "CanvasLayer", true, false):
+				(c as CanvasLayer).visible = not on
 		"lod low":
 			Settings.set_value("graphics", "lod_quality", "low" if on else str(_base["lod"]), false)
 		"decoratives off":
@@ -560,7 +646,7 @@ func _set_variant(name: String, on: bool) -> void:
 					cv._apply_shadows()
 		"preset low", "preset medium", "preset ultra":
 			Settings.apply_preset(name.trim_prefix("preset ") if on else "high")
-		"trees hidden", "walls hidden", "belts hidden", "terrain hidden", "entities hidden":
+		"trees hidden", "walls hidden", "belts hidden", "all belts hidden", "inserters hidden", "terrain hidden", "entities hidden":
 			const ModelLibrary := preload("res://scripts/world/model_library.gd")
 			if not on:
 				for node in _hidden:
@@ -569,7 +655,10 @@ func _set_variant(name: String, on: bool) -> void:
 				_hidden.clear()
 				return
 			var trees := {}
-			var prefixes: Array = {"trees hidden": ["tree-", "dead-", "dry-"], "walls hidden": ["stone-wall"], "belts hidden": ["transport-belt"]}.get(name, [])
+			var prefixes: Array = {"trees hidden": ["tree-", "dead-", "dry-"], "walls hidden": ["stone-wall"], "belts hidden": ["transport-belt"],
+				"all belts hidden": ["transport-belt", "fast-transport-belt", "express-transport-belt", "turbo-transport-belt", "underground-belt",
+					"fast-underground-belt", "express-underground-belt", "turbo-underground-belt"],
+				"inserters hidden": ["inserter", "burner-inserter", "fast-inserter", "long-handed-inserter", "bulk-inserter", "stack-inserter"]}.get(name, [])
 			for model in ModelLibrary._cache:
 				for prefix: String in prefixes:
 					if str(model).begins_with(prefix):
@@ -592,6 +681,10 @@ func _set_variant(name: String, on: bool) -> void:
 ## This frame's subtrees taking over a millisecond: {name: ms}. A marker sits right after its
 ## subtree, so the time from the marker before it (in time) to it is that subtree's; "before" is
 ## everything up to the first marker (autoloads such as Bridge, and main itself).
+## --probe-fine: subtrees down to 0.01 ms (an average frame's breakdown), not only those over 0.1.
+var SEGMENT_MIN_MS := 0.005 if "--probe-fine" in OS.get_cmdline_user_args() else 0.1
+
+
 func _segments() -> Dictionary:
 	var order := _marks.filter(func(e: Array) -> bool: return (e[0] as FrameStart).at >= _start.at)
 	order.sort_custom(func(a: Array, b: Array) -> bool: return (a[0] as FrameStart).at < (b[0] as FrameStart).at)
@@ -601,8 +694,9 @@ func _segments() -> Dictionary:
 	for entry in order:
 		var mark: FrameStart = entry[0]
 		var ms := (mark.at - last) / 1000.0
-		if ms > 0.1:
-			out[label if label == "before" else str(entry[1])] = snappedf(ms, 0.1)
+		if ms > SEGMENT_MIN_MS:
+			var key: String = label if label == "before" else str(entry[1])
+			out[key] = snappedf(float(out.get(key, 0.0)) + ms, 0.01 if SEGMENT_MIN_MS < 0.1 else 0.1)
 		label = ""
 		last = mark.at
 	return out
@@ -701,7 +795,14 @@ func _finish() -> void:
 	for row: Array in world.far_chunks.models().slice(0, 25):
 		print("FAR model %-36s instances %6d x %5d triangles = %8d" % [row[0], row[1], row[2], int(row[1]) * int(row[2])])
 	var phases := {"load": summarize(_load_frames), "walk": summarize(_frames)}
-	var text := JSON.stringify({"summary": phases, "frames": _frames, "load_frames": _load_frames, "variants": _variant_results})
+	var lat: Array = world.drawn_latency
+	var lat_ms: Array = lat.map(func(r: Array) -> float: return float(r[0]))
+	var near_ms: Array = lat.filter(func(r: Array) -> bool: return r.size() > 2 and float(r[2]) >= 0.0).map(func(r: Array) -> float: return float(r[2]))
+	print("STUTTER chunks drawn while walking %d: wanted to drawn p50 %.0f p99 %.0f worst %.0f ms; came within 2 chunks of the focus still not drawn %d, from then: p50 %.0f p99 %.0f worst %.0f ms; still not drawn at the end %d; overruns %s" % [
+		lat_ms.size(), pct(lat_ms, 0.5), pct(lat_ms, 0.99), pct(lat_ms, 1.0), near_ms.size(), pct(near_ms, 0.5), pct(near_ms, 0.99), pct(near_ms, 1.0),
+		world.undrawn(), JSON.stringify(preload("res://scripts/world/frame_budget.gd").overruns)])
+	var text := JSON.stringify({"summary": phases, "frames": _frames, "load_frames": _load_frames, "variants": _variant_results, "latency": lat,
+		"frame_budget": "shared" if preload("res://scripts/world/frame_budget.gd").shared else "separate"})
 	var f := FileAccess.open(out_path, FileAccess.WRITE)
 	if f != null:
 		f.store_string(text)

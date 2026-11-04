@@ -9,6 +9,7 @@ extends Node3D
 const WorldMirror := preload("res://scripts/world/world.gd")
 const ProtoDB := preload("res://scripts/world/protos.gd")
 const Visuals := preload("res://scripts/world/visuals.gd")
+const FrameBudget := preload("res://scripts/world/frame_budget.gd")
 const ModelLibrary := preload("res://scripts/world/model_library.gd")
 
 const KINDS := ["w", "r", "g"]
@@ -20,7 +21,7 @@ const SEGMENTS := 12
 ## of small poles sags about 0.35 tiles, as in Factorio).
 const SAG_PER_TILE := 0.045
 const REBUILDS_PER_FRAME := 4
-const REBUILD_USEC := 1500
+const REBUILD_USEC := 1500  # its slice in frame_budget.gd
 
 ## Where wires attach, in tiles from the pole's position (x east, y up, z south), for poles
 ## facing north: Factorio's `connection_points[1].wire`, in pixels on the sprite, with heights
@@ -41,7 +42,7 @@ var world: WorldMirror
 
 var _meshes := {}  # Vector2i chunk -> MeshInstance3D
 var _dirty := {}  # Vector2i -> true
-var _material: StandardMaterial3D
+var _material: ShaderMaterial
 var _spans := 0
 ## The remote view's fog (remote_fog.gd): wires starting in chunks no radar sees are hidden.
 var fog: Node
@@ -49,11 +50,10 @@ var _fogged := false
 
 
 func _ready() -> void:
-	_material = StandardMaterial3D.new()
-	_material.vertex_color_use_as_albedo = true
-	_material.roughness = 0.55
-	_material.metallic = 0.3
-	_material.cull_mode = BaseMaterial3D.CULL_DISABLED  # thin tubes: no need to get the winding right
+	# A shader of its own (the look StandardMaterial3D gave: vertex colour, roughness 0.55, metal
+	# 0.3, both sides) so the wires ride on the hills with their poles (ground_height.gd).
+	_material = ShaderMaterial.new()
+	_material.shader = preload("res://shaders/wire.gdshader")
 	if world != null:
 		world.entities_changed.connect(_on_entities_changed)
 
@@ -63,6 +63,7 @@ func reset() -> void:
 		mi.queue_free()
 	_meshes.clear()
 	_dirty.clear()
+	_wired.clear()
 	_spans = 0
 
 
@@ -70,26 +71,38 @@ func span_count() -> int:
 	return _spans
 
 
+## Chunks whose records list no wire at all (false), as their last rebuild found: a neighbour
+## arriving can't give them a span to draw, so only a change of their own builds them again (while
+## walking every new chunk dirtied its eight neighbours, each going through all its records).
+var _wired := {}
+
+
 func _on_entities_changed(c: Vector2i) -> void:
+	_wired.erase(c)
 	for dy in range(-1, 2):
 		for dx in range(-1, 2):
-			_dirty[c + Vector2i(dx, dy)] = true
+			var n := c + Vector2i(dx, dy)
+			if n == c or _wired.get(n, true):
+				_dirty[n] = true
 
 
 func _process(_delta: float) -> void:
 	_apply_fog()
 	if world == null or _dirty.is_empty():
+		FrameBudget.waiting(&"wires", 0)
 		return
 	var budget := REBUILDS_PER_FRAME
 	var started := Time.get_ticks_usec()
+	var allow := FrameBudget.grant(&"wires")
 	for c in _dirty.keys():
 		# Also within REBUILD_USEC (at least one): each new chunk dirties its eight neighbours, and on
 		# the owner's busy save a frame of rebuilds took 4-7 ms while walking.
-		if budget <= 0 or (budget < REBUILDS_PER_FRAME and Time.get_ticks_usec() - started > REBUILD_USEC):
+		if allow <= 0 or budget <= 0 or (budget < REBUILDS_PER_FRAME and Time.get_ticks_usec() - started > allow):
 			break
 		_dirty.erase(c)
 		_rebuild(c)
 		budget -= 1
+	FrameBudget.spent(&"wires", Time.get_ticks_usec() - started, _dirty.size())
 
 
 ## The wires listed by entities in chunk `c`. A wire listed by both ends belongs to the end with
@@ -98,18 +111,24 @@ func _rebuild(c: Vector2i) -> void:
 	var old: MeshInstance3D = _meshes.get(c)
 	if old != null:
 		_spans -= int(old.get_meta("spans", 0))
-		old.queue_free()
-		_meshes.erase(c)
 	var cv = world.chunks.get(c)
 	if cv == null:
+		_wired.erase(c)
+		if old != null:
+			old.queue_free()
+			_meshes.erase(c)
 		return
 	var tube := Tube.new()
 	var spans := 0
+	var wired := false
 	for rec: WorldMirror.Rec in cv.entities.values():
 		if rec.unit == 0 or rec.extra.is_empty() or rec.extra.has("gh"):
 			continue
 		for kind: String in KINDS:
-			for other_unit in _array(rec.extra.get(kind)):
+			var list = rec.extra.get(kind)
+			if list is Array and not (list as Array).is_empty():
+				wired = true
+			for other_unit in _array(list):
 				var other: WorldMirror.Rec = world.entities.get(int(other_unit))
 				if other == null or other.extra.has("gh"):
 					continue
@@ -117,13 +136,21 @@ func _rebuild(c: Vector2i) -> void:
 					continue
 				_add_span(tube, attach_point(rec, kind), attach_point(other, kind), kind)
 				spans += 1
+	_wired[c] = wired
 	if spans == 0:
+		if old != null:
+			old.queue_free()
+			_meshes.erase(c)
 		return
-	var mi := MeshInstance3D.new()
+	# The chunk's node is kept and given the new mesh: freeing and making one per rebuild added to
+	# the frame's deferred frees while walking.
+	var mi := old
+	if mi == null:
+		mi = MeshInstance3D.new()
+		add_child(mi)
+		_meshes[c] = mi
 	mi.mesh = tube.mesh(_material)
 	mi.set_meta("spans", spans)
-	add_child(mi)
-	_meshes[c] = mi
 	_spans += spans
 
 

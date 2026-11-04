@@ -28,6 +28,8 @@ var main: Node = null
 var addons: Array = []
 var events := AddonEvents.new()
 var world := AddonWorld.new(self)
+## The add-on whose hills (api.terrain) are drawn now, "" for flat ground.
+var _terrain_owner := ""
 ## Add-ons' windows: over the HUD, under Zenith's menus.
 var layer := CanvasLayer.new()
 var ui_root := Control.new()
@@ -189,6 +191,10 @@ func game_ended() -> void:
 	_daytime_by = ""
 	events.detach()
 	_game_on = false
+	# The next game starts flat until an add-on gives it hills again.
+	if _terrain_owner != "":
+		preload("res://scripts/world/ground_height.gd").clear()
+		_terrain_owner = ""
 
 
 func in_game() -> bool:

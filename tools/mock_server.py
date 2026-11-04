@@ -666,6 +666,7 @@ def darkness_at(daytime):
 
 class MockGame(mock_info.InfoMixin):
     def __init__(self, seed, drop, day_length=25000, start=(-3.0, 0.5)):
+        self.lanes = {}  # belt lanes a bl client holds: key -> [items, settled] (send_belt_lanes)
         self.seed, self.drop, self.day_length = seed, drop, day_length
         self.rng = random.Random(seed)
         self.tick = 0
@@ -800,6 +801,7 @@ class MockGame(mock_info.InfoMixin):
         self.by_chunk.setdefault(chunk, set()).add(key)
         if entity.type == "pipe":
             entity.extra["pc"] = self.pipe_mask(entity)
+        self.refresh_alt(entity)
         if announce and self.watched(entity):
             self.send_reliable({"t": "add", "e": entity.record()})
             if self.client and self.client.get("dc") and chunk in self.subs:
@@ -1274,16 +1276,76 @@ class MockGame(mock_info.InfoMixin):
                 out.append((lane * 10_000_000 + int(cycle) * length * 2 + i + 1, name, belt.x + dx, top + s))
         return out
 
+    LANE_REFRESH = 64
+
+    @staticmethod
+    def lane_key(x, y):
+        """belt_items.lua's lane key for an item at x, y on the mock's belts (all run north-south):
+        its tile and which half of it."""
+        tx, ty = math.floor(x), math.floor(y)
+        return ((tx + 32768) * 65536 + (ty + 32768)) * 8 + (1 if x - tx < 0.5 else 2)
+
+    def send_belt_lanes(self, flat, extra):
+        """bi for a client that says bl, as belt_items.lua sends it: a lane whose items didn't
+        change since its last read is read again once (settled) and then held, not sent, until it
+        changes, every LANE_REFRESH updates, or leaves the square (dl). ln says which lane each
+        run of a part's items came from."""
+        lanes = {}
+        for i in range(0, len(flat), 4):
+            lanes.setdefault(self.lane_key(flat[i + 2] / 256, flat[i + 3] / 256), []).append(flat[i:i + 4])
+        self.lane_count = getattr(self, "lane_count", 0) + 1
+        sent, emptied = [], []
+        for key, items in sorted(lanes.items()):
+            sig = tuple(tuple(it) for it in items)
+            rec = self.lanes.get(key)
+            if rec and rec[0] == sig and rec[1] and (key + self.lane_count) % self.LANE_REFRESH:
+                continue
+            self.lanes[key] = [sig, bool(rec and rec[0] == sig)]
+            sent.append((key, items))
+        dropped = []
+        for key in sorted(set(self.lanes) - set(lanes)):
+            del self.lanes[key]
+            tx, ty = key // 8 // 65536 - 32768, key // 8 % 65536 - 32768
+            if (tx + 0.5 - self.focus[0]) ** 2 + (ty + 0.5 - self.focus[1]) ** 2 < (extra["fr"] + 1) ** 2 * 2 and                     any(b.x == tx + 0.5 and b.y == ty + 0.5 for b in self.belt_tiles()):
+                emptied.append(key)  # its items moved on or were taken off: sent with none
+            else:
+                dropped.append(key)
+        parts, part, ln = [], [], []
+        for key, items in sent:
+            for it in items:
+                if len(part) == ITEMS_PER_MESSAGE * 4:
+                    parts.append((part, ln))
+                    part, ln = [], []
+                part += it
+                if ln and ln[-2] == key:
+                    ln[-1] += 1
+                else:
+                    ln += [key, 1]
+        parts.append((part, ln))
+        for i, (items, ln) in enumerate(parts):
+            more = dict(extra, ln=([k for key in emptied for k in (key, 0)] if i == 0 else []) + ln)
+            if i == 0:
+                more["dl"] = dropped
+            st = self.stacks_in(items)
+            if st:
+                more["st"] = st
+            self.send_list("bi", i + 1, len(parts), items, 4, more)
+
+    def belt_tiles(self):
+        return list(self.belt or []) + [b for column in getattr(self, "belt_field", []) for b in column]
+
     def send_far_belts(self):
         """belt_items.lua's far_tick: what each belt's two lanes carry (`bfar`), per subscribed chunk
         within far_r of the focus, when it changed."""
         fx, fy, _ = self.focus
         lanes = {}  # chunk -> [x, y, d, a, b, ...]
         counts = {}  # chunk -> [lane 1 count, lane 2 count, ...]: the starter belt is half full, the field full
-        starter = [(b, IID[self.belt_lanes[1]], IID[self.belt_lanes[0]], 2) for b in self.belt]
-        field = [(b, IID[BELT_FIELD_ITEMS[(c * 2) % len(BELT_FIELD_ITEMS)]], IID[BELT_FIELD_ITEMS[(c * 2 + 1) % len(BELT_FIELD_ITEMS)]], 4)
+        starter = [(b, IID[self.belt_lanes[1]], IID[self.belt_lanes[0]], 2, 1) for b in self.belt]
+        field = [(b, IID[BELT_FIELD_ITEMS[(c * 2) % len(BELT_FIELD_ITEMS)]], IID[BELT_FIELD_ITEMS[(c * 2 + 1) % len(BELT_FIELD_ITEMS)]], 4,
+                  4 if c % 4 == 1 else 1)
                  for c, column in enumerate(self.belt_field) for b in column]
-        for belt, a, b, n in starter + field:
+        piles = {}
+        for belt, a, b, n, h in starter + field:
             if belt.key() not in self.entities:
                 continue
             chunk = (math.floor(belt.x / 32), math.floor(belt.y / 32))
@@ -1291,6 +1353,7 @@ class MockGame(mock_info.InfoMixin):
                 continue
             lanes.setdefault(chunk, []).extend([fixed(belt.x), fixed(belt.y), belt.dir, a, b])
             counts.setdefault(chunk, []).extend([n, n])
+            piles.setdefault(chunk, []).extend([h, h])
         sent = self.__dict__.setdefault("far_sent", {})
         for chunk in list(sent):
             if chunk not in self.subs:  # sent again when it comes back, as world.lua's subscribe
@@ -1299,7 +1362,10 @@ class MockGame(mock_info.InfoMixin):
             l = lanes.get(chunk, [])
             if sent.get(chunk) != l and chunk in self.subs:
                 sent[chunk] = l
-                self.send_now({"t": "bfar", "cx": chunk[0], "cy": chunk[1], "l": l, "c": counts.get(chunk, [])})
+                msg = {"t": "bfar", "cx": chunk[0], "cy": chunk[1], "l": l, "c": counts.get(chunk, [])}
+                if any(h > 1 for h in piles.get(chunk, [])):
+                    msg["h"] = piles[chunk]  # how high the lanes' stacks are piled
+                self.send_now(msg)
 
     def build_belt_field(self, cols, rows, x0=12, y0=-16):
         """Full belts side by side running south (--belt-field), every lane its own item."""
@@ -1362,6 +1428,24 @@ class MockGame(mock_info.InfoMixin):
         r = self.belt_field_rect
         return r is not None and r[0] <= tx < r[2] and r[1] <= ty < r[3]
 
+    @staticmethod
+    def belt_stack(uid):
+        """How many items the belt item `uid` stacks (2.1.23: a stack inserter puts stacks of up to 4
+        on a belt, one entry each): every fourth column of the belt field, from the second, carries
+        stacks of 4."""
+        if uid < 20_000_000:
+            return 1
+        return 4 if (uid - 20_000_000) // 2_000_000 % 4 == 1 else 1
+
+    def stacks_in(self, flat):
+        """bi st for a part's items: [unique id, size, ...] for those of more than one."""
+        out = []
+        for i in range(0, len(flat), 4):
+            n = self.belt_stack(flat[i])
+            if n > 1:
+                out += [flat[i], n]
+        return out
+
     def belt_field_items(self):
         out = []
         n = len(BELT_FIELD_ITEMS)
@@ -1371,8 +1455,11 @@ class MockGame(mock_info.InfoMixin):
             for lane, dx in enumerate((-0.25, 0.25)):
                 item = BELT_FIELD_ITEMS[(c * 2 + lane) % n]
                 base = 20_000_000 + (c * 2 + lane) * 1_000_000
+                # Every third column stops for 6 s in every 12 (backed up), as most of a busy base's
+                # lanes are: belt_items.lua then holds its lanes (bl) instead of sending them.
+                t = self.tick if c % 3 != 2 else self.tick // 720 * 360 + min(self.tick % 720, 360)
                 for i in range(length * 4):  # full lanes: 4 items per tile
-                    cycle, s = divmod(i * 0.25 + self.tick * BELT_SPEED, length)
+                    cycle, s = divmod(i * 0.25 + t * BELT_SPEED, length)
                     belt = column[int(s)]
                     if belt.key() in self.entities:
                         out.append((base + (int(cycle) * length * 4 + i) % 1_000_000, item, belt.x + dx, top + s))
@@ -1613,13 +1700,18 @@ class MockGame(mock_info.InfoMixin):
                 print(f"client {addr[0]}:{addr[1]} connected (session {sid})")
                 self.client = {"addr": addr, "sid": sid, "last_seen": self.tick, "handshake": self.tick, "resync": -1000,
                                "chat_at": self.tick + 240,
-                               "z": msg.get("z") == 1, "dc": msg.get("dc") == 1, "b": msg.get("b") == 1}
+                               "z": msg.get("z") == 1, "dc": msg.get("dc") == 1, "b": msg.get("b") == 1,
+                               "bl": msg.get("bl") == 1}
+                self.lanes = {}
                 self.rate, self.rate_from, self.rate_at = 0, 0, -10 ** 9
                 self.handshake()
             else:
                 self.client["last_seen"] = self.tick
                 self.client["z"] = msg.get("z") == 1
                 self.client["b"] = msg.get("b") == 1
+                if self.client.get("bl") != (msg.get("bl") == 1):
+                    self.lanes = {}
+                self.client["bl"] = msg.get("bl") == 1
                 if msg.get("dc") == 1 and not self.client.get("dc"):
                     self.client["dc"] = True
                     self.send_parts("dprotos", [[DID[name], name] for name in DECORATIVE_PROTOS])
@@ -1788,7 +1880,9 @@ class MockGame(mock_info.InfoMixin):
         elif t == "bfar":
             self.far_r = max(0, min(1024, int(msg.get("r", 0) or 0)))
             n = msg.get("n")
-            self.near_r = max(0, min(96, int(n))) if isinstance(n, (int, float)) else None
+            self.near_r = max(0, min(320, int(n))) if isinstance(n, (int, float)) else None
+            m = msg.get("m")
+            self.bi_cap = max(200, min(100000, int(m))) if isinstance(m, (int, float)) and m > 0 else None
         elif t == "budget":
             u = msg.get("u")
             if isinstance(u, (int, float)) and u == u:
@@ -1981,7 +2075,7 @@ class MockGame(mock_info.InfoMixin):
         if target is None:
             p["mining"] = None
             return
-        if p["mining"] and p["mining"]["entity"] is target:
+        if p["mining"] and (p["mining"]["entity"] is target or (target.unit and p["mining"]["entity"].unit == target.unit)):
             p["mining"]["until"] = self.tick + HOLD_TICKS
             return
         if math.hypot(target.x - p["x"], target.y - p["y"]) > (4.2 if target.type == "resource" else 11.5):
@@ -2003,6 +2097,10 @@ class MockGame(mock_info.InfoMixin):
             return True
         item, count = ITEM_YIELD.get(target.type, (target.name, 1))
         inv[item] = inv.get(item, 0) + count
+        if target.unit and self.entities.get(target.key()) is not target:
+            # A train carriage or car (issue #10): it leaves the movers; the rails under it stay.
+            self.movers = [m for m in self.movers if m["unit"] != target.unit]
+            return False
         self.remove(target)
         return False
 
@@ -3171,26 +3269,58 @@ class MockGame(mock_info.InfoMixin):
                 if isinstance(msg["al"].get("msg"), str):
                     spk["al"]["msg"] = msg["al"]["msg"][:200]
 
+    def alt_icon(self, e):
+        """Alt-mode's icon of an entity, [kind, name, more?], or None (the mod's alt_mode.icon)."""
+        m = self.machines.get(e.unit)
+        kind = SCREEN_KINDS.get(e.type)
+        if kind in ("crafter", "furnace"):
+            # Unopened machines have the recipe their screen will show; one whose recipe was
+            # cleared shows nothing, like the mod.
+            recipe = m["recipe"] if m is not None else ("iron-gear-wheel" if kind == "crafter" else "iron-plate")
+            return ["recipe", recipe] if recipe else None
+        if kind == "inserter" and m and m["ins"]["n"] and any(m["ins"]["f"]):
+            names = [f for f in m["ins"]["f"] if f]
+            return ["item", names[0]] + ([names[1:]] if len(names) > 1 else [])
+        if kind == "splitter" and m and m["spl"]["f"]:
+            return ["item", m["spl"]["f"]]
+        return None
+
+    def refresh_alt(self, e):
+        """Puts the entity's Alt-mode icon in its record (extra.ai, issue #9); True if it changed."""
+        if not e.unit:
+            return False
+        icon = self.alt_icon(e)
+        if icon == e.extra.get("ai"):
+            return False
+        if icon:
+            e.extra["ai"] = icon
+        else:
+            e.extra.pop("ai", None)
+        return True
+
     def tick_alt(self):
-        if not self.alt or self.tick % ALT_INTERVAL:
+        if self.tick % ALT_INTERVAL:
             return
+        # The mod watches furnaces and wired machines; the mock looks at its opened machines (the only
+        # ones whose recipe or filters change) and sends what changed (`aiu`).
+        changed = []
+        for unit in list(self.machines):
+            e = self.entities.get(unit)
+            if e is not None and self.refresh_alt(e) and self.watched(e):
+                icon = e.extra.get("ai")
+                changed.append([unit] + (icon if icon else [""]))
+        if changed:
+            self.send_reliable({"t": "aiu", "l": changed})
+        if not self.alt:
+            return
+        # A client from before issue #9 asks with `alt`: the icons near the focus once a second.
         fx, fy, fr = self.focus
         icons = []
         for e in self.entities.values():
             if e.unit and abs(e.x - fx) <= fr and abs(e.y - fy) <= fr:
-                m = self.machines.get(e.unit)
-                kind = SCREEN_KINDS.get(e.type)
-                if kind in ("crafter", "furnace"):
-                    # Unopened machines have the recipe their screen will show; one whose recipe was
-                    # cleared shows nothing, like the mod.
-                    recipe = m["recipe"] if m is not None else ("iron-gear-wheel" if kind == "crafter" else "iron-plate")
-                    if recipe:
-                        icons.append([e.unit, "recipe", recipe])
-                elif kind == "inserter" and m and m["ins"]["n"] and any(m["ins"]["f"]):
-                    names = [f for f in m["ins"]["f"] if f]
-                    icons.append([e.unit, "item", names[0]] + ([names[1:]] if len(names) > 1 else []))
-                elif kind == "splitter" and m and m["spl"]["f"]:
-                    icons.append([e.unit, "item", m["spl"]["f"]])
+                icon = self.alt_icon(e)
+                if icon:
+                    icons.append([e.unit] + icon)
         self.send_now({"t": "ai", "l": icons[:400]})
 
     # --- the UI data ------------------------------------------------------------------------
@@ -3939,24 +4069,44 @@ class MockGame(mock_info.InfoMixin):
         if self.rate_due("bi", BELT_ITEM_INTERVAL):
             fx, fy, fr = self.focus
             r = min(BELT_ITEM_RADIUS if near is None else near, fr)
+            moving = self.belt_items() + self.belt_field_items()
+            cap = getattr(self, "bi_cap", None)
+            if cap:
+                # belt_items.lua: whole rings round the focus up to the client's cap (bfar m).
+                rings = {}
+                for _, _, x, y in moving:
+                    ring = math.floor(max(abs(x - fx), abs(y - fy)))
+                    if ring < r:
+                        rings[ring] = rings.get(ring, 0) + 1
+                total = 0
+                for ring in sorted(rings):
+                    total += rings[ring]
+                    if total > cap:
+                        r = ring
+                        break
             flat = []
             fresh = []
-            for uid, name, x, y in self.belt_items() + self.belt_field_items():
-                if abs(x - fx) <= r and abs(y - fy) <= r:
+            for uid, name, x, y in moving:
+                if abs(x - fx) < r and abs(y - fy) < r:
                     flat += [uid, IID[name], fixed(x), fixed(y)]
                     if name in SPOILING:
                         fresh += [uid, 1000 - (self.tick + uid * 97) % 1000]
             if fresh:
                 self.send_now({"t": "bf", "part": 1, "parts": 1, "l": fresh})
             self.space.belt_quality(flat[0::4])
-            per = ITEMS_PER_MESSAGE * 4
-            parts = max(1, math.ceil(len(flat) / per))
-            for i in range(parts):
-                self.send_list("bi", i + 1, parts, flat[i * per:(i + 1) * per], 4,
-                               {"fx": fixed(fx), "fy": fixed(fy), "fr": int(r), "p": self.rate_period("bi", BELT_ITEM_INTERVAL)})
+            extra = {"fx": fixed(fx), "fy": fixed(fy), "fr": int(r), "p": self.rate_period("bi", BELT_ITEM_INTERVAL)}
+            if self.client.get("bl"):
+                self.send_belt_lanes(flat, extra)
+            else:
+                per = ITEMS_PER_MESSAGE * 4
+                parts = max(1, math.ceil(len(flat) / per))
+                for i in range(parts):
+                    chunk = flat[i * per:(i + 1) * per]
+                    st = self.stacks_in(chunk)
+                    self.send_list("bi", i + 1, parts, chunk, 4, dict(extra, st=st) if st else extra)
         if self.rate_due("ih", BELT_ITEM_INTERVAL):
             fx, fy, fr = self.focus
-            r = min(BELT_ITEM_RADIUS if near is None else near, fr)
+            r = min(BELT_ITEM_RADIUS, fr)  # inserters.lua: the map's detail radius, not the client's belt distance
             hands = []
             for unit, x, y, item in self.inserter_hands():
                 if abs(x - fx) <= r and abs(y - fy) <= r:

@@ -111,6 +111,9 @@ const OPENABLE_TYPES := [
 ]
 ## Movers a click opens: their inventories (a car's trunk, a wagon's cargo), a train's schedule.
 const OPENABLE_MOVERS := ["car", "spider-vehicle", "locomotive", "cargo-wagon", "artillery-wagon"]
+## Movers the right button mines (Factorio mines every vehicle and wagon, with what is inside).
+const MINEABLE_MOVERS := ["car", "spider-vehicle", "locomotive", "cargo-wagon", "fluid-wagon",
+	"artillery-wagon", "infinity-cargo-wagon"]
 ## Undo keeps this many of the client's own actions.
 const HISTORY := 50
 
@@ -163,6 +166,8 @@ var _drive_code := 0  # the last drive command sent, as accelerate * 3 + steer; 
 var _mine_timer := 0.0
 var _mining := false
 var _mine_target: WorldMirror.Rec = null
+## The mover last marked for deconstruction from the remote view while the button is held.
+var _remote_marked_mover := 0
 var _pickup_timer := 0.0
 var _drop_timer := 0.0
 var _shoot_mode := -1
@@ -365,14 +370,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		Settings.set_value("interface", "show_help", not bool(Settings.get_value("interface", "show_help")))
 		hud.help.visible = bool(Settings.get_value("interface", "show_help"))
 	elif Controls.pressed(event, "open_screen"):
-		# Factorio's E: closes whatever is open, else opens the inventory. Over a building that has
-		# a screen it opens that instead (left click does too).
+		# E: closes whatever is open, else opens your own inventory, whatever is under the mouse
+		# (owner: never the hovered building or vehicle; left click opens those).
 		if hud.ui.is_open():
 			hud.ui.close_all()
-		elif hovered != null and _openable(hovered):
-			_open(hovered)
-		elif not hovered_mover.is_empty():
-			_open_mover()
 		else:
 			hud.ui.toggle_inventory()
 	elif Controls.pressed(event, "next_gun"):
@@ -690,6 +691,7 @@ func _update_mining(delta: float) -> void:
 		_mine_target = null
 	if not _rmb_down:
 		_remote_marked = null
+		_remote_marked_mover = 0
 		if _mining:
 			Bridge.send({"t": "mine_stop"})
 			_mining = false
@@ -704,12 +706,28 @@ func _update_mining(delta: float) -> void:
 	if _mine_timer > 0.0 or not has_ground:
 		return
 	_mine_timer = REPEAT
-	var target: WorldMirror.Rec = world.pick(ground)
+	# Issue #10: a train or car stands over rails and ground the world's pick would find instead, so
+	# the vehicle under the mouse comes first, as for hover, and goes by its unit number.
+	var mover := _mineable_mover_under_mouse()
+	var target: WorldMirror.Rec = world.pick(ground) if mover.is_empty() else null
 	if hud.ui.remote:
 		# Remote view can't reach anything: mining marks it for deconstruction instead (Factorio 2.0).
+		if not mover.is_empty():
+			if _remote_marked_mover != int(mover[0]):
+				_remote_marked_mover = int(mover[0])
+				var c: Vector2 = mover[3]
+				Bridge.send({"t": "decon", "i": 0, "x1": int((c.x - 0.1) * 256.0), "y1": int((c.y - 0.1) * 256.0),
+					"x2": int((c.x + 0.1) * 256.0), "y2": int((c.y + 0.1) * 256.0), "u": int(mover[0]), "p": int(mover[1])})
+			return
 		if target != null and target != _remote_marked:
 			_remote_marked = target
 			_mark_for_deconstruction(target)
+		return
+	if not mover.is_empty():
+		var at: Vector2i = mover[2]
+		Bridge.send({"t": "mine", "u": int(mover[0]), "p": int(mover[1]), "x": at.x, "y": at.y})
+		_mining = true
+		_mine_target = null
 		return
 	if target != null:
 		Bridge.send({"t": "mine", "u": target.unit, "p": target.proto_id, "x": target.fixed.x, "y": target.fixed.y})
@@ -1150,6 +1168,24 @@ func _mover_under_mouse() -> Array:
 	var screen: Vector2 = rig.aim_position() if rig.first_person else hud.ui.mouse_position()
 	var r := rig.ray(screen)
 	return movers.pick_ray(r[0], r[1], OPENABLE_MOVERS)
+
+
+## The vehicle or wagon under the mouse that the right button mines (anything held), or [].
+func _mineable_mover_under_mouse() -> Array:
+	if movers == null or over_gui or _clean_shot or not has_ground:
+		return []
+	if not hovered_mover.is_empty() and MINEABLE_MOVERS.has(_mover_type(hovered_mover)):
+		return hovered_mover
+	if rig == null:
+		return []
+	var screen: Vector2 = rig.aim_position() if rig.first_person else hud.ui.mouse_position()
+	var r := rig.ray(screen)
+	return movers.pick_ray(r[0], r[1], MINEABLE_MOVERS)
+
+
+func _mover_type(m: Array) -> String:
+	var proto: ProtoDB.EntityProto = world.protos.entity(int(m[1]))
+	return proto.type if proto != null else ""
 
 
 ## A click on a vehicle or wagon (a mover) opens its screen, like Factorio's.

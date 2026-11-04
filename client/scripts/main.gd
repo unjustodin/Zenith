@@ -46,7 +46,6 @@ const ItemIcons := preload("res://scripts/world/item_icons.gd")
 const Avatar := preload("res://scripts/player/avatar.gd")
 const CameraRig := preload("res://scripts/player/camera_rig.gd")
 const PlayerInput := preload("res://scripts/player/player_input.gd")
-const TallFade := preload("res://scripts/world/tall_fade.gd")
 const Hud := preload("res://scripts/ui/hud.gd")
 const LocaleNames := preload("res://scripts/world/locale_names.gd")
 const Fx := preload("res://scripts/fx/fx.gd")
@@ -65,6 +64,7 @@ const TerritoryLayer := preload("res://scripts/world/territories.gd")
 const DemolisherLayer := preload("res://scripts/world/demolishers.gd")
 const GuiAssets := preload("res://scripts/ui/factorio/gui_assets.gd")
 const QualityMarks := preload("res://scripts/world/quality_marks.gd")
+const AltArrows := preload("res://scripts/world/alt_arrows.gd")
 const SunShadows := preload("res://scripts/world/sun_shadows.gd")
 const AddonHost := preload("res://scripts/addons/addon_host.gd")
 
@@ -116,6 +116,7 @@ var demolishers: DemolisherLayer
 ## Riding a rocket up to a platform's hub, life in the hub, a cargo pod down.
 var ride: Ride
 var quality_marks: QualityMarks
+var alt_arrows: AltArrows
 ## Holds the game at 60 UPS by asking the bridge for less while the game runs slow.
 var ups_governor: UpsGovernor
 ## Add-ons, for the whole run (menus too).
@@ -328,9 +329,11 @@ func start_game() -> void:
 	belt_lanes.name = "BeltLanes"
 	belt_lanes.protos = world.protos
 	belt_lanes.world = world
-	belt_lanes.distance = clampi(int(Settings.get_value("graphics", "belt_far_distance")), 0, 640)
-	belt_lanes.near = clampi(int(Settings.get_value("graphics", "belt_near_distance")), 8, 96)
+	belt_lanes.distance = clampi(int(Settings.get_value("graphics", "belt_distance")), 0, 640)
+	belt_lanes.near = mini(belt_lanes.distance, BeltLaneLayer.MOVING_MAX)
+	belt_lanes.cap = BeltLaneLayer.cap_of(float(Settings.get_value("graphics", "belt_updates")))
 	_game.add_child(belt_lanes)
+	belt_items.lanes = belt_lanes
 
 	ground_items = GroundItemLayer.new()
 	ground_items.name = "GroundItems"
@@ -392,11 +395,6 @@ func start_game() -> void:
 	rig.target = avatar
 	decoratives.rig = rig
 	_game.add_child(rig)
-	var tall_fade := TallFade.new()  # the tall-entities toggle's fade (shader uniforms)
-	tall_fade.name = "TallFade"
-	tall_fade.rig = rig
-	tall_fade.avatar = avatar
-	_game.add_child(tall_fade)
 	if ReviewShots.requested():
 		var shots := ReviewShots.new()
 		shots.rig = rig
@@ -444,6 +442,14 @@ func start_game() -> void:
 	quality_marks.alt_mode = hud.ui.alt_mode
 	hud.ui.alt_mode_changed.connect(func(on: bool) -> void: quality_marks.alt_mode = on)
 	_game.add_child(quality_marks)
+	alt_arrows = AltArrows.new()
+	alt_arrows.name = "AltArrows"
+	alt_arrows.world = world
+	alt_arrows.model = hud.ui.model
+	alt_arrows.fog = remote_fog
+	alt_arrows.alt_mode = hud.ui.alt_mode
+	hud.ui.alt_mode_changed.connect(func(on: bool) -> void: alt_arrows.alt_mode = on)
+	_game.add_child(alt_arrows)
 
 	platform_panel = PlatformPanel.new()
 	platform_panel.name = "PlatformPanel"
@@ -606,6 +612,7 @@ func _apply_game_settings() -> void:
 	_sun.shadow_enabled = Settings.shadow_size() > 0
 	if _sun.shadow_enabled:
 		# Atlas, splits, distance (fitted to the view), blending and filter by quality (sun_shadows.gd).
+		sun_shadows.distance_cap = clampf(float(Settings.get_value("graphics", "shadow_distance")), 0.0, 1000.0)
 		sun_shadows.apply_quality(str(Settings.get_value("graphics", "shadows")))
 	_env.ssao_enabled = bool(Settings.get_value("graphics", "ssao"))
 	_planet_sky.set_clouds(bool(Settings.get_value("graphics", "clouds")))
@@ -615,8 +622,10 @@ func _apply_game_settings() -> void:
 	world.view_radius = clampi(int(held.limit("view", float(Settings.get_value("graphics", "view_radius")))), 1, 20)
 	ModelLods.apply_quality(str(Settings.get_value("graphics", "lod_quality")), get_viewport())
 	world.far_chunks.enabled = bool(Settings.get_value("graphics", "merge_far"))
-	belt_lanes.distance = clampi(int(held.limit("far", float(Settings.get_value("graphics", "belt_far_distance")))), 0, 640)
-	belt_lanes.near = clampi(int(held.limit("near", float(Settings.get_value("graphics", "belt_near_distance")))), 8, 96)
+	belt_lanes.distance = clampi(int(held.limit("far", float(Settings.get_value("graphics", "belt_distance")))), 0, 640)
+	# Items move as far out as the cap allows, within the distance (an add-on may ask for less: near).
+	belt_lanes.near = clampi(int(held.limit("near", float(belt_lanes.distance))), 0, BeltLaneLayer.MOVING_MAX)
+	belt_lanes.cap = BeltLaneLayer.cap_of(held.limit("updates", BeltLaneLayer.cap_wanted(float(Settings.get_value("graphics", "belt_updates")))))
 	belt_lanes.smooth = bool(Settings.get_value("graphics", "belt_smooth")) and held.limit("smooth", 1.0) >= 1.0
 	decoratives.set_options(bool(Settings.get_value("graphics", "decoratives")), float(Settings.get_value("graphics", "decorative_density")))
 	decoratives.distance = clampf(float(Settings.get_value("graphics", "decorative_distance")), 32.0, 320.0)
@@ -884,7 +893,7 @@ func _build_environment() -> void:
 	env.ambient_light_color = Color(0.75, 0.78, 0.82)
 	env.ambient_light_energy = 0.6
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	env.ssao_enabled = true
+	env.ssao_enabled = bool(Settings.get_value("graphics", "ssao"))
 	_env = env
 	var world_env := WorldEnvironment.new()
 	world_env.environment = env

@@ -240,8 +240,8 @@ func _scan(elapsed: float) -> void:
 	var emitters := {}
 	var protos := world.protos
 	var states := {}
-	for unit in world.working:
-		var working := int(world.working[unit]) == 1
+	for unit in world.working_near(focus, SMOKE_RANGE):
+		var working := int(world.working.get(unit, 0)) == 1
 		var r: WorldMirror.Rec = world.entities.get(unit)
 		if r == null:
 			continue

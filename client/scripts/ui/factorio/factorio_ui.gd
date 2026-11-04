@@ -914,7 +914,6 @@ func typing() -> bool:
 ## Settings → Interface → In the game: which HUD parts show.
 func _apply_settings() -> void:
 	shortcuts.visible = bool(Settings.get_value("interface", "shortcut_bar"))
-	shortcuts.set_on("tall", bool(Settings.get_value("interface", "hide_tall")))
 	research_hud.set_meta("enabled", bool(Settings.get_value("interface", "research_progress")))
 	research_hud._refresh()
 	entity_info.set_meta("enabled", bool(Settings.get_value("interface", "entity_info")))
@@ -1041,8 +1040,6 @@ func _on_shortcut(name: String) -> void:
 			planners.give_new("blueprint_book")
 		"alt":
 			set_alt_mode(not alt_mode)
-		"tall":  # Factorio's tall-entities toggle: tall_fade.gd fades the ones in the way
-			Settings.set_value("interface", "hide_tall", not bool(Settings.get_value("interface", "hide_tall")))
 		"spidertron":
 			player.hold_tool("spidertron")
 		"artillery", "discharge":

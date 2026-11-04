@@ -23,8 +23,6 @@ signal trains_changed
 ## Factorio's trains overview: the list arrived (`trl`), or a window asked to see it.
 signal trains_overview_changed
 signal trains_overview_requested
-## Alt-mode icons (`ai`), the clipboard (`clip`), chat lines and statistics arrived.
-signal alt_icons_changed
 ## Vulcanus' demolisher territories arrived or went (`terr`): territory_edges changed.
 signal territories_changed
 ## The trains on the map's surface arrived (`mtr`): map_trains changed.
@@ -181,8 +179,6 @@ var train_of_unit := {}
 var guns: Array = []
 var selected_gun := 1
 
-## Alt-mode icons near the camera (`ai`): unit -> [icon type ("item", "fluid", "recipe"), name].
-var alt_icons := {}
 var _unghost_q := 0
 ## Demolisher territories (`terr`): their borders as tile segments, [a0, b0, a1, b1, ...] where a
 ## chunk of a territory meets ground that isn't that territory's.
@@ -677,17 +673,6 @@ func handle(msg: Dictionary) -> bool:
 				if int(msg.get("part", 1)) >= int(msg.get("parts", 1)):
 					map_trains = _map_train_parts.duplicate()
 					map_trains_changed.emit()
-		"ai":
-			alt_icons.clear()
-			for r in _array(msg.get("l")):
-				# A machine without a recipe or filter shows nothing (not an empty frame).
-				if r is Array and r.size() >= 3 and str(r[2]) != "":
-					var icon := [str(r[1]), str(r[2])]
-					if r.size() >= 4 and r[3] is Array:  # a filter inserter's other filters
-						for f in r[3]:
-							icon.append(str(f))
-					alt_icons[int(r[0])] = icon
-			alt_icons_changed.emit()
 		"bp", "bp_ok", "bpl", "hist", "quals":
 			planners.handle(msg)
 		"clip":
@@ -1325,12 +1310,10 @@ func set_craft_queue(entries: Array) -> void:
 
 # --- Factorio's world controls (ui_actions.lua) -------------------------------------------------
 
-## Alt-mode on or off: while on the mod sends the icons near the camera once a second.
-func set_alt_mode(on: bool) -> void:
-	Bridge.send({"t": "alt", "on": 1 if on else 0})
-	if not on:
-		alt_icons.clear()
-		alt_icons_changed.emit()
+## Alt-mode on or off. Nothing to ask the mod: the icons come with the entity records (`extra.ai`,
+## issue #9) whether it is on or not, so they show at once. (0.1.1's client sent `alt`.)
+func set_alt_mode(_on: bool) -> void:
+	pass
 
 
 ## A line in the game's chat.

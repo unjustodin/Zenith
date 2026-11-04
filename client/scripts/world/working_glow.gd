@@ -172,8 +172,8 @@ func _process(delta: float) -> void:
 ## Which working machines of these kinds are near the focus.
 func _refresh() -> void:
 	var focus: Vector2 = world.focus()
-	for unit in world.working:
-		if int(world.working[unit]) != 1 or _shown.has(unit):
+	for unit in world.working_near(focus, RADIUS):
+		if int(world.working.get(unit, 0)) != 1 or _shown.has(unit):
 			continue
 		var rec = world.entities.get(unit)
 		if rec == null or rec.pos.distance_to(focus) > RADIUS:

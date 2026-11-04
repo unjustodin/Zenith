@@ -238,7 +238,7 @@ func _ready() -> void:
 	check(node != null and node.started == 1 and node.api != null, "the entry script was started with its API")
 	var api = node.api if node != null else null
 	check(api != null and api.version == AddonLoader.API_VERSION and api.id == "test-addon", "the API says its version and the add-on's id")
-	check(api != null and is_equal_approx(api.level, 1.1), "and its level, 1.1")
+	check(api != null and is_equal_approx(api.level, 1.2), "and its level, 1.2")
 	var disk := host.find("disk-addon")
 	check(disk.has("node") and int(disk["node"].answer) == 42, "a .gd loaded from user:// runs, with its relative preload")
 	check(not host.find("future-addon").has("node") and not host.find("refcounted").has("node"), "refused add-ons aren't started")
@@ -456,6 +456,13 @@ func _ready() -> void:
 	host.set_enabled("test-addon", true)
 	check(host.find("test-addon").has("node") and InputMap.has_action(fly), "and on again")
 	host.game_ended()
+	# A download's bundled add-ons start as package.py says (addons/bundled.json), until switched.
+	_write("user://bundled-test.json", '{"cinematic-camera": true, "terrain-elevation": false}')
+	var defaults := AddonLoader.bundled_defaults("user://bundled-test.json")
+	check(defaults.get("cinematic-camera") == true and defaults.get("terrain-elevation") == false
+		and AddonLoader.bundled_defaults("user://no-such-file.json").is_empty(),
+		"bundled.json gives a download's add-ons their first state (the camera on, the hills off)")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://bundled-test.json"))
 	_finish()
 
 

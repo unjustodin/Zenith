@@ -652,6 +652,8 @@ func _migrate_some() -> void:
 		if done:
 			_migrate.pop_back()
 	write_usec += Time.get_ticks_usec() - t0
+	if not _migrate.is_empty() or Time.get_ticks_usec() - t0 > 50:
+		preload("res://scripts/world/frame_budget.gd").spent(&"anim_migrate", Time.get_ticks_usec() - t0, _migrate.size())
 
 
 func _process(delta: float) -> void:

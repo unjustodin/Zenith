@@ -1,10 +1,13 @@
 extends Control
-## Factorio's Alt-mode (Alt): over each machine near the camera the icon of what it is set to make
-## or let through (an assembler's or furnace's recipe, an inserter's, splitter's or storage chest's
-## filter), from the mod's `ai` (ui_model.alt_icons), and on every pipe, underground pipe, pump and
+## Factorio's Alt-mode (Alt): over each machine in view the icon of what it is set to make or let
+## through (an assembler's or furnace's recipe, an inserter's, splitter's or storage chest's
+## filter), from its record's `extra.ai` (issue #9: every machine the client has loaded, kept per
+## chunk in ChunkView.alt and changed by `aiu`), and on every pipe, underground pipe, pump and
 ## tank the icon of the fluid in it (fluids_power.gd's `fl`). As in Factorio the icons have no
 ## disc behind them, only a soft dark shadow, and are drawn flat over the world at the entity's
-## position projected through the camera, sized with the zoom.
+## position projected through the camera, sized with the zoom. Only chunks in the camera's view
+## are looked at; all the shadows are drawn first and then the icons picture by picture, so the
+## canvas batches them (a shadow between two icons would split every batch).
 ##
 ## factorio_ui.gd sets `player` (player_input.gd: its world mirror and camera rig).
 
@@ -63,7 +66,20 @@ func _process(_delta: float) -> void:
 
 
 func _draw() -> void:
+	collect()
+	for rect in _shadows:
+		draw_texture_rect(_shadow, rect, false)
+	for texture in _icons:
+		for rect in _icons[texture]:
+			draw_texture_rect(texture, rect, false)
+
+
+## Works out this frame's icons (first person: places the quads) into _shadows and _icons.
+func collect() -> void:
 	_quads_used = 0
+	_shadows.clear()
+	_icons.clear()
+	drawn = 0
 	if not on or model == null or player == null:
 		_hide_quads()
 		return
@@ -75,17 +91,42 @@ func _draw() -> void:
 	var camera: Camera3D = rig.camera
 	_in_3d = bool(rig.get("first_person"))
 	_fog = player.get("remote_fog")
-	for unit in model.alt_icons:
-		var icon: Array = model.alt_icons[unit]
-		var textures: Array[Texture2D] = []
-		for i in range(1, icon.size()):  # a filter inserter's filters, every one
-			textures.append(Kit.item_icon(str(icon[i])))
-		_draw_icon(world, camera, unit, textures, ICON_TILES)
+	var planes := camera.get_frustum()
+	for c in world.chunks:
+		var cv = world.chunks[c]
+		if cv.alt.is_empty() or not _chunk_in_view(c, planes):
+			continue
+		for key in cv.alt:
+			var r: WorldMirror.Rec = cv.alt[key]
+			var icon := WorldMirror.alt_icon(r)
+			if icon.is_empty():
+				continue
+			var textures: Array[Texture2D] = []
+			for i in range(1, icon.size()):  # a filter inserter's filters, every one
+				textures.append(Kit.item_icon(str(icon[i])))
+			_draw_icon(world, camera, r, textures, ICON_TILES)
 	var parent: Node = world.get_parent()
 	var fluids_layer = parent.get_node_or_null("FluidsPower") if parent != null else null
-	if fluids_layer == null:
-		_hide_quads()
-		return
+	if fluids_layer != null:
+		_draw_fluids(world, camera, fluids_layer)
+	drawn = _shadows.size() + _quads_used
+	_hide_quads()
+
+
+## Whether a chunk's box (the ground up to 8 tiles) is at least partly inside the camera's frustum.
+static func _chunk_in_view(c: Vector2i, planes: Array[Plane]) -> bool:
+	var lo := Vector3(c.x * 32.0, -1.0, c.y * 32.0)
+	var hi := lo + Vector3(32.0, 9.0, 32.0)
+	for plane in planes:
+		# The box's corner furthest into the frustum (against the plane's outward normal).
+		var n := plane.normal
+		var p := Vector3(lo.x if n.x > 0.0 else hi.x, lo.y if n.y > 0.0 else hi.y, lo.z if n.z > 0.0 else hi.z)
+		if plane.distance_to(p) > 0.0:
+			return false
+	return true
+
+
+func _draw_fluids(world, camera: Camera3D, fluids_layer) -> void:
 	for unit in fluids_layer.fluids:
 		var r: WorldMirror.Rec = world.entities.get(unit)
 		if r == null:
@@ -97,9 +138,8 @@ func _draw() -> void:
 		for b in boxes:
 			var fluid := str(b.get("fluid", ""))
 			if fluid != "" and float(b.get("amount", 0.0)) > 0.0:
-				_draw_icon(world, camera, unit, [Kit.item_icon(fluid)], FLUID_TILES)
+				_draw_icon(world, camera, r, [Kit.item_icon(fluid)], FLUID_TILES)
 				break
-	_hide_quads()
 
 
 ## Cells of a grid for `n` icons in a square of side 1 (top-left corners and the cell's side), as
@@ -119,8 +159,7 @@ static func grid(n: int) -> Array:
 	return out
 
 
-func _draw_icon(world, camera: Camera3D, unit, textures: Array[Texture2D], tiles: float) -> void:
-	var r: WorldMirror.Rec = world.entities.get(unit)
+func _draw_icon(world, camera: Camera3D, r: WorldMirror.Rec, textures: Array[Texture2D], tiles: float) -> void:
 	if r == null or textures.is_empty():
 		return
 	var proto = world.protos.entity(r.proto_id)
@@ -146,11 +185,19 @@ func _draw_icon(world, camera: Camera3D, unit, textures: Array[Texture2D], tiles
 		var corner: Vector2 = p - Vector2(half, half) + (cells[i][0] as Vector2) * half * 2.0
 		var s := side * 0.65
 		var mid := corner + Vector2(side, side) * 0.5
-		draw_texture_rect(_shadow, Rect2(mid - Vector2(s, s), Vector2(s, s) * 2.0), false)
-		draw_texture_rect(textures[i], Rect2(corner, Vector2(side, side)), false)
+		_shadows.append(Rect2(mid - Vector2(s, s), Vector2(s, s) * 2.0))
+		var rects: Array = _icons.get(textures[i], [])
+		if rects.is_empty():
+			_icons[textures[i]] = rects
+		rects.append(Rect2(corner, Vector2(side, side)))
 
 
 var _in_3d := false
+## This frame's icons: their shadows, and their rectangles by picture (drawn in that order).
+var _shadows: Array[Rect2] = []
+var _icons := {}  # Texture2D -> [Rect2, ...]
+## Icons drawn in the last frame (tests, the stutter probe).
+var drawn := 0
 
 
 ## First person: the icons over `top` as camera-facing quads in the world, in the same grid.

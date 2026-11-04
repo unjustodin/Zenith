@@ -350,8 +350,6 @@ static var _cache := {}  # name -> Mesh, or null when there is no model
 static var _parts := {}  # name -> Array of AnimPart (empty for models without moving parts)
 static var _glowing := {}  # Mesh -> true when it has surfaces that glow while working
 ## Height in tiles above which a model counts as tall (Factorio's tall-entities toggle).
-const TALL := 2.0
-static var _tall_cache := {}  # Factorio material -> its `tall` twin
 static var _factorio_cache := {}  # [imported material, has COLOR, UV2, CUSTOM0] -> ShaderMaterial
 
 
@@ -872,7 +870,8 @@ const SCENE_SOURCE := "scene:"
 ## Models parsed at once (terrain meshing and LODs share the worker pool).
 const LOAD_JOBS := 3
 ## Main-thread time a frame spends making the models whose jobs are done (at least one).
-const FINISH_USEC := 4000
+const FINISH_USEC := 4000  # its slice in frame_budget.gd
+const FrameBudget := preload("res://scripts/world/frame_budget.gd")
 static var _sources := {}  # name -> GLTF_SOURCE + path, SCENE_SOURCE + path, or ""
 static var _jobs := {}  # name -> [task id (-1 while queued), Load]
 static var _job_order: Array[String] = []
@@ -1212,8 +1211,17 @@ static func poll() -> bool:
 			running += 1
 	var start := Time.get_ticks_usec()
 	var made := 0
+	var done := 0  # jobs finished on their worker, waiting to be made here
+	for name in _job_order:
+		var entry: Array = _jobs[name]
+		if int(entry[0]) >= 0 and WorkerThreadPool.is_task_completed(entry[0]):
+			done += 1
+	if done == 0 and _remnant_jobs.is_empty():
+		FrameBudget.waiting(&"models", 0)
+		return false
+	var allow := FrameBudget.grant(&"models")
 	for name in _job_order.duplicate():
-		if made > 0 and Time.get_ticks_usec() - start > FINISH_USEC:
+		if allow <= 0 or (made > 0 and Time.get_ticks_usec() - start > allow):
 			break
 		var entry: Array = _jobs.get(name, [])
 		if entry.is_empty() or int(entry[0]) < 0 or not WorkerThreadPool.is_task_completed(entry[0]):
@@ -1222,7 +1230,10 @@ static func poll() -> bool:
 		mesh_for(name)
 		_polling = false
 		made += 1
-	made += _finish_remnants()
+		done -= 1
+	if allow > 0:
+		made += _finish_remnants()
+	FrameBudget.spent(&"models", Time.get_ticks_usec() - start, maxi(done, 0))
 	if made > 0:
 		generation += 1
 	return made > 0
@@ -1265,7 +1276,6 @@ static func _commit_load(load: Load, parts: Array) -> Mesh:
 		part.mesh = _commit_groups(p[2])
 		if part.mesh != null:
 			parts.append(part)
-	_mark_tall(mesh, parts, first)
 	return mesh
 
 
@@ -1341,35 +1351,7 @@ static func _flatten(root: Node, parts: Array) -> Mesh:
 	var first := parts.size()
 	_collect(root, Transform3D.IDENTITY, tools, order, parts, "")
 	var mesh := _commit(tools, order)
-	_mark_tall(mesh, parts, first)
 	return mesh
-
-
-## Models taller than TALL tiles fade when they stand between the camera and the character
-## (Factorio's tall-entities shortcut): their materials carry `tall` (factorio_material).
-static func _mark_tall(mesh: Mesh, parts: Array, first: int) -> void:
-	var top := mesh.get_aabb().end.y if mesh != null else 0.0
-	for i in range(first, parts.size()):
-		var part: AnimPart = parts[i]
-		if part.mesh != null:
-			top = maxf(top, (part.pivot * part.mesh.get_aabb()).end.y)
-	if top > TALL:
-		for m in [mesh] + parts.slice(first).map(func(part: AnimPart) -> Mesh: return part.mesh):
-			if m is ArrayMesh:
-				for i in (m as ArrayMesh).get_surface_count():
-					(m as ArrayMesh).surface_set_material(i, _tall(m.surface_get_material(i)))
-
-
-## The `tall` twin of a Factorio material (shared by every tall model using it).
-static func _tall(material: Material) -> Material:
-	var sm := material as ShaderMaterial
-	if sm == null:
-		return material
-	if not _tall_cache.has(sm):
-		var copy := ModelLods.copy_material(sm)
-		copy.set_shader_parameter("tall", true)
-		_tall_cache[sm] = copy
-	return _tall_cache[sm]
 
 
 static func _commit(tools: Dictionary, order: Array) -> ArrayMesh:
@@ -1471,6 +1453,9 @@ static func _factorio(material: Material, has_color: bool, has_uv2: bool, has_vi
 	out.shader = FactorioAlphaShader if see_through else FactorioShader
 	if name.begins_with("leafcard"):
 		out.shader = FactorioLeafShader
+	# Cliffs' rock sits on the low ground when there are hills (ground_height.gd).
+	if name.begins_with("cliff-"):
+		out.set_shader_parameter("ground_low", true)
 	if base != null:
 		out.set_shader_parameter("albedo", base.albedo_color)
 		out.set_shader_parameter("roughness", base.roughness)

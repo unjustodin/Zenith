@@ -4,7 +4,7 @@ Used by the tests for both the real bridge mod (tools/mod_tests) and the mock se
 two can't drift apart. `problems(msg)` returns a list of strings; empty means valid.
 """
 
-RELIABLE = {"cmdr", "welcome", "protos", "tprotos", "iprotos", "fprotos", "ready", "chunk", "ents", "add", "upd", "del", "tiles", "st", "inv", "recipes",
+RELIABLE = {"cmdr", "welcome", "protos", "tprotos", "iprotos", "fprotos", "ready", "chunk", "ents", "add", "upd", "del", "aiu", "tiles", "st", "inv", "recipes",
             "guns", "slots", "qb", "rdet", "craftable", "techs", "clog", "surface", "eprops", "surfs", "planet",
             "bp", "bp_ok", "bpl", "hist", "quals", "iuse", "pidx", "dprotos", "dec", "ccol"}
 IMMEDIATE = {"me", "mv", "bi", "ih", "gi", "sky", "msg", "gui", "hp", "tf", "ts", "afx", "died", "cq", "rs", "fl", "pw", "ht", "chart", "tags", "tr", "ln", "rc", "plat",
@@ -82,7 +82,17 @@ def entity_record_problems(rec, where):
         out.append(f"{where}: extra.rm (what left the remnants) is a prototype id or 0: {rec!r}")
     elif len(rec) == 6 and "co" in rec[5] and rec[5]["co"] not in CLIFF_ORIENTATIONS:
         out.append(f"{where}: extra.co is a cliff orientation like \"west-to-east\": {rec!r}")
+    elif len(rec) == 6 and "fa" in rec[5] and not (_int(rec[5]["fa"]) and 1 <= rec[5]["fa"] <= 3):
+        out.append(f"{where}: extra.fa (a recipe's fluid in 1 / out 2, Alt-mode's arrows) is 1-3: {rec!r}")
+    elif len(rec) == 6 and "ai" in rec[5] and not _alt_icon(rec[5]["ai"]):
+        out.append(f"{where}: extra.ai (Alt-mode icon) is [icon type, name, more filters?]: {rec!r}")
     return out
+
+
+def _alt_icon(v):
+    """[icon type, name] or [icon type, name, [more names]]: an Alt-mode icon (issue #9)."""
+    return (isinstance(v, list) and len(v) in (2, 3) and v[0] in ("item", "fluid", "recipe", "virtual")
+            and isinstance(v[1], str) and v[1] != "" and (len(v) == 2 or (_list(v[2]) and all(isinstance(x, str) for x in _items(v[2])))))
 
 
 # Every pair of different sides, "none" included: 20 orientations.
@@ -934,6 +944,16 @@ def problems(msg):
         elif t == "bi" and any(k in msg for k in ("fx", "fy", "fr")) and not (
                 all(_int(msg.get(k)) for k in ("fx", "fy", "fr")) and msg["fr"] >= 0):
             out.append(f"bi: fx, fy (1/256 tile) and fr (tiles, >= 0) come together, as integers: {msg.get('fx')!r} {msg.get('fy')!r} {msg.get('fr')!r}")
+        elif t == "bi" and "ln" in msg and not (
+                _list(msg["ln"]) and len(_items(msg["ln"])) % 2 == 0 and all(_int(v) and v >= 0 for v in _items(msg["ln"]))
+                and sum(_items(msg["ln"])[1::2]) == len(_items(l)) // 4):
+            out.append(f"bi: ln must be [lane key, count, ...] (non-negative integers) whose counts add up to the part's items: {msg['ln']!r}")
+        elif t == "bi" and "dl" in msg and not (_list(msg["dl"]) and all(_int(v) and v > 0 for v in _items(msg["dl"]))):
+            out.append(f"bi: dl must be a list of lane keys (positive integers): {msg['dl']!r}")
+        elif t == "bi" and "st" in msg and not (
+                _list(msg["st"]) and len(_items(msg["st"])) % 2 == 0 and all(_int(v) for v in _items(msg["st"]))
+                and all(2 <= v <= 4 for v in _items(msg["st"])[1::2])):
+            out.append(f"bi: st must be [unique id, stack size (2-4), ...] as integers: {msg['st']!r}")
         elif t == "pw" and not all(v in (0, 1, 2) for v in _items(l)[1::2]):
             out.append(f"pw: states must be 0 (no power), 1 (low power) or 2 (not connected): {l!r}")
     elif t == "en":
@@ -1260,6 +1280,10 @@ def problems(msg):
             counts = _items(msg.get("c"))
             if not _list(msg.get("c")) or len(counts) != len(lanes) // 5 * 2 or not all(_int(v) and 0 <= v <= 4 for v in counts):
                 out.append(f"bfar: c is two counts (0-4) per belt in l: {counts[:10]!r}")
+        if "h" in msg:
+            piles = _items(msg.get("h"))
+            if not _list(msg.get("h")) or len(piles) != len(lanes) // 5 * 2 or not all(_int(v) and 1 <= v <= 4 for v in piles):
+                out.append(f"bfar: h is two pile heights (1-4) per belt in l: {piles[:10]!r}")
     elif t == "mtr":
         need("si", "part", "parts")
         need("l", check=_list)
@@ -1394,6 +1418,15 @@ def problems(msg):
             if not (isinstance(rec, list) and len(rec) in (3, 4) and _int(rec[0]) and rec[1] in ("item", "fluid", "recipe", "virtual")
                     and isinstance(rec[2], str) and (len(rec) == 3 or (_list(rec[3]) and all(isinstance(v, str) for v in _items(rec[3]))))):
                 out.append(f"ai: entry must be [unit, icon type, name, more filters?]: {rec!r}")
+    elif t == "aiu":
+        need("l", check=_list)
+        for rec in _items(msg.get("l")):
+            if not (isinstance(rec, list) and len(rec) >= 2 and _int(rec[0])
+                    and ((len(rec) == 2 and rec[1] == "") or _alt_icon(rec[1:]))):
+                out.append(f"aiu: entry must be [unit, icon type, name, more filters?] or [unit, \"\"]: {rec!r}")
+        for rec in _items(msg.get("fa", [])):
+            if not (isinstance(rec, list) and len(rec) == 2 and _int(rec[0]) and _int(rec[1]) and 0 <= rec[1] <= 3):
+                out.append(f"aiu: fa entry must be [unit, fluid mask 0-3]: {rec!r}")
     elif t == "clip":
         need("l", check=_list)
         for rec in _items(msg.get("l")):

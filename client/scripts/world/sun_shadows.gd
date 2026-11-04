@@ -52,6 +52,11 @@ static var legacy := "--legacy-render" in OS.get_cmdline_user_args()
 var sun: DirectionalLight3D
 var quality := "high"
 var spec: Dictionary = QUALITY["high"]
+## Settings > Graphics > Shadow distance: the furthest the shadows reach, tiles from the camera, in
+## place of the quality's cap; 0 (Automatic) keeps the quality's. The shadows still stop just past
+## the ground in view: this only lets them go further when zoomed out (and spreads the same map
+## over more ground, so they are softer), or stops them sooner.
+var distance_cap := 0.0
 ## The ground in view now: [nearest, furthest] depth from the camera (furthest INF: the horizon).
 var view_depths := Vector2.ZERO
 ## Whether the view reaches far now (Godot's cascades rather than one map).
@@ -113,7 +118,7 @@ func _fit(force: bool) -> void:
 	if cam == null:
 		return
 	view_depths = ground_depths(cam)
-	var cap := float(spec["cap"])
+	var cap := cap_for(spec, distance_cap)
 	var want := distance_for(view_depths.y, cap, -1.0 if force else sun.directional_shadow_max_distance, float(spec["fade"]))
 	if want != sun.directional_shadow_max_distance or force:
 		sun.directional_shadow_max_distance = want
@@ -157,6 +162,11 @@ static func ground_depths(cam: Camera3D) -> Vector2:
 
 ## The shadow distance for ground in view out to `furthest`: past it by the fade (Godot's shadows
 ## fade out from `fade` of the distance on, so the fade starts past the top of the screen), on the
+## The shadows' cap: the setting's distance when one is chosen, else the quality's.
+static func cap_for(s: Dictionary, chosen: float) -> float:
+	return chosen if chosen > 0.0 else float(s["cap"])
+
+
 ## ladder (MIN_DISTANCE x STEP^n), at most `cap`. `current` (-1: none) is kept while the view needs
 ## a little less than it.
 static func distance_for(furthest: float, cap: float, current: float, fade := 0.8) -> float:

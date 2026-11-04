@@ -10,6 +10,7 @@ const Anim := preload("res://scripts/world/anim.gd")
 const TerrainMesher := preload("res://scripts/world/terrain_mesher.gd")
 const ModelLods := preload("res://scripts/world/model_lods.gd")
 const FarChunks := preload("res://scripts/world/far_chunks.gd")
+const BeltLods := preload("res://scripts/world/belt_lods.gd")
 
 const SIZE := 32
 ## Entity types whose models get a per-entity random turn and size (see _model_transform).
@@ -24,6 +25,7 @@ var created_msec := Time.get_ticks_msec()
 var tiles_msec := 0
 var drawn_msec := 0
 var entities := {}  # key -> WorldMirror.Rec
+var alt := {}  # key -> WorldMirror.Rec: those with an Alt-mode icon (extra.ai, issue #9)
 ## world.gd pick()'s index of `entities` by PICK_CELL square: built when first needed, emptied
 ## whenever an entity comes or goes. [protos count it was built with, {cell: [[rec, rect, area]]}]
 var pick_grid: Array = []
@@ -43,6 +45,17 @@ var placeholder_keys := {}
 var waiting_models := false
 ## Far from the camera, the buildings are one merged mesh (far_chunks.gd).
 var far := FarChunks.State.new()
+## Belts drawn small on screen are drawn with their stand-ins (belt_lods.gd, which sets belt_flat).
+## belt_bounds: round this chunk's belts; belt_waiting: a belt was drawn whole as its stand-in was
+## still being made (belt_lods.gd builds the chunk again once it is).
+var belt_flat := false
+var belt_bounds := AABB()
+var belt_waiting := false
+## Belt models drawn here -> how many moving parts each has (hidden with the model when flat), and
+## per model [[the model's and its parts' MultiMeshes], its stand-in's MultiMesh or null].
+var _belt_models := {}
+var _belt_pairs: Array = []
+var _flat_mmis := {}
 
 var _terrain: MeshInstance3D
 ## How this chunk's things cast shadows (world.gd _update_shadow_casters): through the models'
@@ -107,6 +120,7 @@ func mark_missing() -> void:
 
 func clear_entities() -> void:
 	entities.clear()
+	alt.clear()
 	pick_grid = []
 
 
@@ -173,6 +187,7 @@ func set_shadow_tier(tier: int) -> void:
 ## again, and setting them all on every chunk whenever another stand-in was ready made 40-55 ms
 ## frames on a big base.
 func _apply_shadows() -> void:
+	_apply_belt_flat()
 	_proxy_generation = ModelLods.generation
 	_lod_bias = ModelLods.lod_bias
 	var cast := _cast(shadow_tier != SHADOWS_NONE)
@@ -184,7 +199,7 @@ func _apply_shadows() -> void:
 		var ready := ModelLods.is_ready(pair[2])
 		if not ready:
 			_unready += 1
-		var stand_in := shadow_tier != SHADOWS_NONE and ready and not FarChunks.hides(self, pair[0])
+		var stand_in := shadow_tier != SHADOWS_NONE and ready and not FarChunks.hides(self, pair[0]) and (pair[0] as MultiMeshInstance3D).visible
 		var proxy_mmi: MultiMeshInstance3D = pair[1]
 		if proxy_mmi.visible != stand_in:
 			proxy_mmi.visible = stand_in
@@ -193,7 +208,38 @@ func _apply_shadows() -> void:
 		if stand_in:
 			stood_in[pair[0]] = true
 	for mmi in _instances:
-		_set_cast(mmi, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if stood_in.has(mmi) else cast)
+		_set_cast(mmi, GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if stood_in.has(mmi) or _flat_mmis.has(mmi) else cast)
+
+
+## belt_lods.gd: draws this chunk's belts with their stand-ins (flat) or whole.
+func set_belt_flat(flat: bool) -> void:
+	if flat == belt_flat:
+		return
+	belt_flat = flat
+	_apply_shadows()
+
+
+## Shows either each belt model (and its moving parts) or its stand-in, by belt_flat. A pair the
+## merged far mesh hides now (far_chunks.gd) is left as it is: that shows its hidden ones again
+## and then calls _apply_shadows.
+func _apply_belt_flat() -> void:
+	for pair in _belt_pairs:
+		var fulls: Array = pair[0]
+		var flat_mmi: MultiMeshInstance3D = pair[1]
+		if flat_mmi != null and FarChunks.hides(self, flat_mmi):
+			continue
+		if fulls.any(func(m: MultiMeshInstance3D) -> bool: return FarChunks.hides(self, m)):
+			continue
+		var show_flat := belt_flat and flat_mmi != null
+		for m: MultiMeshInstance3D in fulls:
+			if m.visible == show_flat:
+				m.visible = not show_flat
+		if flat_mmi != null and flat_mmi.visible != show_flat:
+			flat_mmi.visible = show_flat
+
+
+func _exit_tree() -> void:
+	BeltLods.untrack(self)
 
 
 static func _set_cast(node: GeometryInstance3D, setting: GeometryInstance3D.ShadowCastingSetting) -> void:
@@ -248,7 +294,12 @@ class Want:
 ## `anim` (anim.gd) gives moving parts their current angle and glows their current activity.
 ## A MultiMesh drawn before is filled again in place (nothing new for the renderer to take on);
 ## new ones are added within `budget` (none: all at once), the rest by add_pending().
-func build_entities(protos: ProtoDB, working: Dictionary, anim: Anim = null, budget: Budget = null) -> void:
+## With `until_usec` (a Time.get_ticks_usec() deadline) a build that runs past it stops part-way
+## (`building`) and carries on where it was when world.gd calls resume_build(): a busy chunk's records
+## took up to 10-24 ms in one frame while walking (docs/PERFORMANCE-AUDIT.md 4.7). The MultiMeshes
+## drawn before stay until it is done.
+func build_entities(protos: ProtoDB, working: Dictionary, anim: Anim = null, budget: Budget = null, until_usec := 0) -> void:
+	_until = until_usec
 	anim_groups.clear()
 	placeholder_keys.clear()
 	waiting_models = false
@@ -262,8 +313,17 @@ func build_entities(protos: ProtoDB, working: Dictionary, anim: Anim = null, bud
 	var cones: Array[Transform3D] = []
 	var cone_colors: Array[Color] = []
 	var merged := FarChunks.skips(self)
+	_belt_models.clear()
+	belt_waiting = false
+	var belt_kinds := {}  # belt Mesh -> its stand-in's kind (belt_lods.gd)
+	var belt_lo := Vector2.INF
+	var belt_hi := -Vector2.INF
 
+	var done := 0
 	for rec in entities.values():
+		done += 1
+		if _until > 0 and (done & 15) == 0 and Time.get_ticks_usec() > _until:
+			await _wait_for_more()
 		var proto: ProtoDB.EntityProto = protos.entity(rec.proto_id)
 		if proto == null or rec.extra.has("gh") or rec.extra.has("tg") or ModelLibrary.hidden(proto.name):
 			continue  # ghosts (and tile ghosts) are drawn by ghosts.gd
@@ -295,6 +355,10 @@ func build_entities(protos: ProtoDB, working: Dictionary, anim: Anim = null, bud
 				parts_by_model[mesh] = ModelLibrary.parts_for_entity(proto.name, proto.type, rec.extra, rec.dir)
 			by_model[mesh].append(_model_transform(proto, rec))
 			recs_by_model[mesh].append([rec, proto.type])
+			if BeltLods.TYPES.has(proto.type):
+				belt_kinds[mesh] = BeltLods.kind_of(proto.type, rec.extra)
+				belt_lo = belt_lo.min(rec.pos)
+				belt_hi = belt_hi.max(rec.pos)
 			if rec.extra.has("cb"):
 				if _add_cargo_pieces(rec, by_model[mesh][-1], by_model, recs_by_model, parts_by_model):
 					waiting_models = true
@@ -314,6 +378,8 @@ func build_entities(protos: ProtoDB, working: Dictionary, anim: Anim = null, bud
 			boxes.append(xform)
 			box_colors.append(color)
 
+	if _until > 0 and done > 16 and Time.get_ticks_usec() > _until:
+		await _wait_for_more()  # the records are read: the MultiMeshes next time
 	var wants: Array[Want] = []
 	for model in by_model:
 		var glows := ModelLibrary.glows(model)
@@ -322,6 +388,18 @@ func build_entities(protos: ProtoDB, working: Dictionary, anim: Anim = null, bud
 		for i in parts.size():
 			var part: ModelLibrary.AnimPart = parts[i]
 			wants.append(_want([model, i], part.mesh, by_model[model], [], null, true, recs_by_model[model], part, true))
+		if belt_kinds.has(model):
+			_belt_models[model] = parts.size()
+			var flat := BeltLods.stand_in(model, belt_kinds[model])
+			if flat != null:
+				wants.append(_want([model, BeltLods.FLAT], flat, by_model[model], [], null, false, [], null, false))
+			elif BeltLods.coming(model):
+				belt_waiting = true
+	if _belt_models.is_empty():
+		BeltLods.untrack(self)
+	else:
+		belt_bounds = AABB(Vector3(belt_lo.x - 1.0, 0.0, belt_lo.y - 1.0), Vector3(belt_hi.x - belt_lo.x + 2.0, 1.0, belt_hi.y - belt_lo.y + 2.0))
+		BeltLods.track(self)
 	if not boxes.is_empty():
 		wants.append(_want("box", Visuals.box_mesh(), boxes, box_colors, Visuals.instance_material(), false, [], null, false))
 	if not cones.is_empty():
@@ -340,6 +418,26 @@ func build_entities(protos: ProtoDB, working: Dictionary, anim: Anim = null, bud
 	_refresh_lists()
 	_apply_shadows()
 	FarChunks.built(self, merged)
+
+
+## A build part-way through (build_entities' until_usec) waits for this, with a new deadline.
+signal _more_time
+## True while a build waits part-way through for resume_build().
+var building := false
+var _until := 0
+
+
+func _wait_for_more() -> void:
+	building = true
+	await _more_time
+	building = false
+
+
+## Lets a build part-way through carry on until `until_usec`.
+func resume_build(until_usec: int) -> void:
+	if building:
+		_until = until_usec
+		_more_time.emit()
 
 
 ## Adds MultiMeshes a build left for later, within `budget`. True once none are left.
@@ -433,6 +531,20 @@ func _refresh_lists() -> void:
 	_instances.clear()
 	for key in _nodes:
 		_instances.append(_nodes[key])
+	_belt_pairs.clear()
+	_flat_mmis.clear()
+	for model in _belt_models:
+		var fulls: Array = []
+		if _nodes.has(model):
+			fulls.append(_nodes[model])
+		for i in int(_belt_models[model]):
+			if _nodes.has([model, i]):
+				fulls.append(_nodes[[model, i]])
+		var flat_mmi: MultiMeshInstance3D = _nodes.get([model, BeltLods.FLAT])
+		if flat_mmi != null:
+			_flat_mmis[flat_mmi] = true
+			flat_mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_belt_pairs.append([fulls, flat_mmi])
 	_shadow_pairs.clear()
 	for model in _shadows:
 		var proxy_mmi: MultiMeshInstance3D = _shadows[model]

@@ -17,7 +17,10 @@ const EXE := "bin/x64/factorio.exe"
 ## and `server/` beside it.
 static func repo_dir() -> String:
 	if OS.has_feature("template"):
-		return OS.get_executable_path().get_base_dir()
+		var here := OS.get_executable_path().get_base_dir()
+		if OS.get_name() == "macOS" and here.ends_with(".app/Contents/MacOS"):
+			return here.path_join("../../..").simplify_path()  # beside Zenith.app
+		return here
 	return ProjectSettings.globalize_path("res://").path_join("..").simplify_path()
 
 
@@ -88,8 +91,12 @@ static func find_factorio_exe() -> String:
 		candidates.append(data.path_join("..").simplify_path().path_join(EXE))
 	for lib in _steam_libraries():
 		candidates.append(lib.path_join("steamapps/common/Factorio").path_join(EXE))
+		# Linux and macOS (the unsupported downloads): Steam's own folder names there.
+		candidates.append(lib.path_join("steamapps/common/Factorio/bin/x64/factorio"))
+		candidates.append(lib.path_join("steamapps/common/Factorio/factorio.app/Contents/MacOS/factorio"))
 	candidates.append("C:/Program Files/Factorio".path_join(EXE))
 	candidates.append(OS.get_environment("HOME").path_join("factorio/bin/x64/factorio"))
+	candidates.append("/Applications/factorio.app/Contents/MacOS/factorio")
 	for c in candidates:
 		if FileAccess.file_exists(c):
 			return c

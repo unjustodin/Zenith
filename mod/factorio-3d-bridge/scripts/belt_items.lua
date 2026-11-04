@@ -10,10 +10,20 @@
 -- the update is sent. Each item is carried on from the tick it was read to the update's tick at
 -- the speed it moved between its last two reads, so the update is one moment of the game.
 --
+-- Lanes that didn't change aren't read again (for a client that says `bl` in its hello). On a busy
+-- base most lanes are backed up: on the owner's save at its busiest belts 86% of 3,352 lanes held
+-- the same items in the same places between two reads seconds apart, 11% were empty and only 3-5%
+-- moved (2.1.23). Reading a lane's items costs about 11 us; its count (`#line`) and its front and
+-- back items' positions (`get_item_position`) about 2. So each lane is checked that cheaply first,
+-- and read in full only when the check differs from the last read, or once more after a change to
+-- see that it has settled, or every LANE_REFRESH updates; the client keeps a lane's items until it
+-- is sent again (`ln`) or dropped (`dl`). (Factorio itself stores a lane as the gaps between its
+-- items and touches only what changes: FFF #176.)
+--
 -- Multiplayer: what decides when and how much is read (the round: where it got to, its belts,
--- the counts) lives in storage.f3d.bi and changes only from on_tick, from game reads. What is sent
--- (the items read so far, their last positions, the text) is module-local: a peer that loaded
--- mid-round only sends less, and only the host sends at all.
+-- the counts; each lane's last check, storage.f3d.bl) lives in storage and changes only from
+-- on_tick, from game reads. What is sent (the items read so far, their last positions, the text)
+-- is module-local: a peer that loaded mid-round only sends less, and only the host sends at all.
 
 local spoilage = require("scripts.spoilage")
 local registry = require("scripts.registry")
@@ -35,6 +45,23 @@ M.items_per_message = 300
 -- in the order Factorio lists belts, whole patches of a dense base went bare: items neither drawn
 -- nor shown as far icons.)
 M.max_items = 6000
+-- Every lane checked counts one towards the cap as well as its items: a sparse area of empty belts
+-- costs a check a lane, and the moving area may reach as far as the client draws belt items.
+M.lane_weight = 1
+-- The cap's edge holds still (owner: the two zones went back and forth standing still, as the count
+-- near the cap moved by a few items each update): the last update's edge is kept while its rings
+-- hold up to KEEP times the cap, and it grows only by rings that fit within GROW times the cap.
+local KEEP, GROW = 1.25, 0.85
+-- A belt line that moved on by whole slots looks the same to the cheap check on every belt (the
+-- items shuffled forward one place each), so every lane is held; when one of them is read in full
+-- later (a refresh, a change) it lists items the client still has on the lane behind, which then
+-- showed one item short until its own read (owner: items "stop and jump", lines not moving together
+-- "over time"). So a lane read in full whose front or back item is another one than at its last
+-- full read has the same lane of the belts either side (belt_neighbours) read in full too, in the
+-- same update, and so on along the line as far as the items shifted. At most FORCE_MAX such lanes an update.
+local FORCE_MAX = 4000
+-- Factorio's utility constant max_belt_stack_size: a stack inserter puts up to 4 items in one place.
+local MAX_STACK = 4
 
 -- How much is read a tick, in work units of 1.5-2.5 us (2.1.23, the owner's save at its busiest
 -- belts): an item read is one, written out three more, one more off a straight belt (the game is
@@ -53,8 +80,27 @@ local BAND = 4
 -- On the tick an update is due, whatever is left of the round is read up to this many times a
 -- tick's units; past it the square shrinks to the last whole ring read (`fr`), as at the cap.
 local DUE_BURST = 2
+-- A lane checked by its count and end items costs about this many units (#line and two
+-- get_item_position, about 2 us in 2.1.23).
+local CHECK_UNITS = 1
+-- Every lane is read in full at least every this many updates even when it looks the same (on a
+-- busy base updates come every 12-30 ticks: 15-30 s): the
+-- client may have missed it (bi isn't resent), or its items changed kind without moving.
+M.lane_refresh = 64
+-- Lane keys: unit number * LANE_KEYS + line index (a splitter has 8 lines).
+local LANE_KEYS = 8
 -- An item moving faster than this (tiles a tick) between two reads was moved some other way.
 local FASTEST = 0.2
+-- A lane flowing full looks exactly the same whenever its items moved a whole number of item gaps
+-- (0.25 on a full lane) since the last check: a turbo belt every 2 ticks, red every 4, yellow and
+-- blue every 8. Checked every 12 or 24 ticks, full belts that flowed were held still on the client
+-- (seen in 2.1.23). So rounds start a tick earlier every other update (the time between two checks
+-- of a lane is then odd: never a whole number of gaps at these speeds), and a check whose time is
+-- a whole number of gaps anyway (a round read over several ticks, other mods' speeds) reads the
+-- lane in full rather than trusting it. BLIND is how near a whole number of gaps counts.
+M.lane_jitter = true
+local GAP = 0.25
+local BLIND = 0.02
 
 -- Underground belts also hold the items travelling under the ground. Those belong to the
 -- entrance's lines but sit outside its tile, so anything outside the entity is dropped.
@@ -68,6 +114,18 @@ end
 -- every update from the items seen, so it stays small. The last place an item was read, and when,
 -- gives how it moves.
 local known = {}
+-- Lane key -> the unique ids its last full read sent (kept in `known` while it is held), and
+-- lanes whose items have a quality or spoil: those are always read in full for what is sent (bq
+-- and bf are whole lists every update), though counted as the check decided.
+local lane_uids = {}
+local lane_special = {}
+-- Unit number -> the belt's LuaTransportLines, for the belts the last round and this one read (a
+-- belt not read in a round is forgotten: gone, or out of the square).
+local line_cache = {}
+local next_cache = {}
+-- Lanes checked, held and read in full (for quality or spoiling items, or settling, or changed),
+-- and items read, since loading: module-local, for /c probes.
+M.counts = { checked = 0, held = 0, blind = 0, special = 0, full = 0, items = 0, belts = 0 }
 
 -- A straight belt's lines run straight along it, so an item's map position is where its line
 -- starts plus its position along the belt. Where the lines start, relative to the belt's centre
@@ -207,10 +265,16 @@ local function write_part(p, target)
   local out, n = {}, 0
   local z, small = transport.compact(), transport.small
   local pu, pi, px, py = 0, 0, 0, 0
+  local st, sts = p.st, nil
   for j = first, last do
     local m = j * 4
     local dt = target - at[j]
     local u, i = raw[m - 3], raw[m - 2]
+    if st[j] then
+      sts = sts or {}
+      sts[#sts + 1] = u
+      sts[#sts + 1] = st[j]
+    end
     local x = floor((raw[m - 1] + vx[j] * dt) * 256 + 0.5)
     local y = floor((raw[m] + vy[j] * dt) * 256 + 0.5)
     if z and j > first then
@@ -223,28 +287,152 @@ local function write_part(p, target)
     pu, pi, px, py = u, i, x, y
   end
   p.bodies[#p.bodies + 1] = table.concat(out, ",")
+  -- Stacks of more than one item (a stack inserter's), by unique id; an item not listed is one.
+  local tail = sts and (',"st":[' .. table.concat(sts, ",") .. "]") or ""
+  if p.lanes then
+    -- Which lane each run of this part's items came from: [key, count, ...] (0: none, an item
+    -- carried on); lanes read with nothing to send since the part before come first, with count 0.
+    -- (Only the first part had them, and lanes read later in the round, the lines read along their
+    -- length at its end above all, were never told: the client kept their old items, a belt one
+    -- short or doubled.)
+    local lk, ln, m = p.lk, {}, 0
+    local part = #p.bodies
+    for x = (p.emptied_upto[part - 1] or 0) + 1, #p.emptied do
+      ln[m + 1], ln[m + 2] = p.emptied[x], 0
+      m = m + 2
+    end
+    p.emptied_upto[part] = #p.emptied
+    local j = first
+    while j <= last do
+      local key, c = lk[j], 0
+      while j <= last and lk[j] == key do
+        c = c + 1
+        j = j + 1
+      end
+      ln[m + 1], ln[m + 2] = key, c
+      m = m + 2
+    end
+    p.tails[#p.bodies] = ',"ln":[' .. table.concat(ln, ",") .. "]" .. tail
+  elseif tail ~= "" then
+    p.tails[#p.bodies] = tail
+  end
   p.written = last
 end
 
 -- Reads one belt's items into the round (and `p`, what is sent, when this peer has it). Returns
 -- the items counted and the units spent.
-local function read_belt(belt, p, now)
-  local items, units = 0, 0
-  local underground = belt.type == "underground-belt"
-  local box = underground and belt.selection_box
-  local d, c
-  if belt.type == "transport-belt" and belt.belt_shape == "straight" then
-    d = DIR[belt.direction]
-    if p and d and not p.starts then
-      p.starts = line_starts(belt)
+local function read_belt(belt, p, now, round, lanes, force)
+  local items, units, held = 0, 0, 0
+  local unit = belt.unit_number
+  -- A belt's line objects are kept from round to round (getting them cost about 2 us a line, as
+  -- much as the check), and its kind, shape and place read only for a lane read in full.
+  local lines = unit and line_cache[unit]
+  if not lines then
+    lines = {}
+    for i = 1, belt.get_max_transport_line_index() do
+      lines[i] = belt.get_transport_line(i)
     end
-    c = belt.position
+    -- Tiles (line positions) its items move a tick: a prototype's, the same on every peer.
+    lines.v = belt.prototype.belt_speed
+    if unit then
+      line_cache[unit] = lines
+    end
   end
-  local starts = p and p.starts
+  if unit then
+    next_cache[unit] = lines
+  end
+  local known_belt, underground, box, d, c, starts = false, false, nil, nil, nil, nil
   local raw, vx, vy, at, seen = p and p.raw, p and p.vx, p and p.vy, p and p.at, p and p.seen
-  for i = 1, belt.get_max_transport_line_index() do
+  for i = 1, #lines do
+    if force and not force[i] then
+      goto next_line
+    end
+    do
     units = units + LINE_UNITS
-    local line = belt.get_transport_line(i)
+    local line = lines[i]
+    local key, full = nil, true
+    if lanes and unit then
+      -- The cheap check first (storage: only game reads decide it).
+      key = unit * LANE_KEYS + i
+      -- n counts stacks (2.1.23: a stack inserter's stack of up to 4 is one entry); the lane's
+      -- items too, since an inserter taking part of a stack moves nothing.
+      local n = #line
+      local p1, pn, total = -1, -1, 0
+      if n > 0 then
+        p1 = line.get_item_position(1)
+        pn = n > 1 and line.get_item_position(n) or p1
+        total = line.get_item_count()
+      end
+      units = units + CHECK_UNITS
+      local rec = lanes[key]
+      -- rec: {count, front, back, round checked, settled, tick checked, items}
+      local same = rec and rec[6] and rec[1] == n and rec[2] == p1 and rec[3] == pn and rec[7] == total
+      local blind = false
+      if same and n > 0 then
+        -- Would a lane flowing at its belt's speed look the same after this long? (Whole gaps on a
+        -- full lane, or whole average gaps between its end items on one evenly filled.)
+        local moved = (now - rec[6]) * (lines.v or 0)
+        local slots = moved / GAP
+        blind = slots - floor(slots + 0.5) < BLIND and slots - floor(slots + 0.5) > -BLIND
+        if not blind and n > 1 and pn ~= p1 then
+          slots = moved * (n - 1) / (pn > p1 and pn - p1 or p1 - pn)
+          blind = slots - floor(slots + 0.5) < BLIND and slots - floor(slots + 0.5) > -BLIND
+        end
+      end
+      local counts = M.counts
+      counts.checked = counts.checked + 1
+      if force then
+        if not rec then
+          rec = { n, p1, pn, 0, false }
+          lanes[key] = rec
+        end
+      elseif blind then
+        counts.blind = counts.blind + 1  -- read in full, settled or not as it was
+      elseif same and rec[5] and (key + round.count) % M.lane_refresh ~= 0 then
+        full = false
+        held = held + n
+        counts.held = counts.held + 1
+      elseif same then
+        rec[5] = true  -- read again unchanged: settled, held from the next update
+      else
+        -- Changed: a fresh record, keeping the end items of its last full read (FORCE_MAX).
+        rec = { n, p1, pn, 0, false, nil, nil, rec and rec[8], rec and rec[9], rec and rec[10] }
+        lanes[key] = rec
+      end
+      rec[4] = round.start
+      rec[6] = now
+      rec[7] = total
+      local keys = round.ring_keys
+      keys[#keys + 1] = key
+      if not full and p then
+        if lane_special[key] then
+          full = "send"  -- read for what is sent only: counted as held
+          M.counts.special = M.counts.special + 1
+        else
+          -- Its items stay as the client has them: kept in `known`, not carried on as missing
+          -- (and written after all if a lane read in full later this update has them: held_only).
+          local seen, held_only = p.seen, p.held_only
+          for _, uid in ipairs(lane_uids[key] or {}) do
+            seen[uid] = known[uid]
+            held_only[uid] = true
+          end
+        end
+      end
+    end
+    if full then
+    if not known_belt then
+      known_belt = true
+      underground = belt.type == "underground-belt"
+      box = underground and belt.selection_box
+      if belt.type == "transport-belt" and belt.belt_shape == "straight" then
+        d = DIR[belt.direction]
+        if p and d and not p.starts then
+          p.starts = line_starts(belt)
+        end
+        c = belt.position
+      end
+      starts = p and p.starts
+    end
     local s = d and starts and starts[i]
     -- The start of this line on the map, and its direction.
     local sx, sy, fx, fy
@@ -253,7 +441,17 @@ local function read_belt(belt, p, now)
       sy = c.y + d[2] * s[1] + d[1] * s[2]
       fx, fy = d[1] * s[3], d[2] * s[3]
     end
+    M.counts.full = M.counts.full + 1
+    local sent_uids, special = key and p and {}, false
+    local wrote_from = p and #p.raw
+    local counted = full ~= "send"
+    local first_uid, last_uid = 0, 0
+    local held_only = p and p.held_only
     for _, item in pairs(line.get_detailed_contents()) do
+      if first_uid == 0 then
+        first_uid = item.unique_id
+      end
+      last_uid = item.unique_id
       -- The hottest loop in the bridge: plain locals, few tables. (What is counted depends only
       -- on the game, never on `p`, so every peer's round goes the same way.)
       local x, y
@@ -262,13 +460,19 @@ local function read_belt(belt, p, now)
       elseif not d then
         local q = line.get_line_item_position(item.position)
         x, y = q.x, q.y
-        units = units + OFF_STRAIGHT_UNITS
+        if counted then
+          units = units + OFF_STRAIGHT_UNITS
+        end
       end
       if not underground or inside(box, x, y) then
-        items = items + 1
+        if counted then
+          items = items + 1
+        end
         local uid = item.unique_id
-        -- An item that moved on to a belt read later in the round is sent once, from its first read.
-        if p and not seen[uid] then
+        -- An item that moved on to a belt read later in the round is sent once, from its first read
+        -- (one only kept with a held lane is written here: it moved on to this lane).
+        if p and (not seen[uid] or held_only[uid]) then
+          held_only[uid] = nil
           local k = known[uid]
           local ux, uy = 0, 0
           if not k then
@@ -285,6 +489,8 @@ local function read_belt(belt, p, now)
             end
           end
           k[4], k[5], k[6], k[7], k[8], k[9] = x, y, now, ux, uy, nil
+          local stack = item.stack.count
+          k[10] = stack > 1 and (stack < MAX_STACK and stack or MAX_STACK) or nil
           seen[uid] = k
           local m = #raw
           raw[m + 1] = uid
@@ -293,6 +499,12 @@ local function read_belt(belt, p, now)
           raw[m + 4] = y
           local j = m / 4 + 1
           vx[j], vy[j], at[j] = ux, uy, now
+          p.lk[j] = key or 0
+          p.st[j] = k[10]
+          if sent_uids then
+            sent_uids[#sent_uids + 1] = uid
+            special = special or k[2] or k[3] ~= "normal"
+          end
           if k[2] then
             local fr = spoilage.freshness(item.stack)
             if fr then
@@ -304,11 +516,63 @@ local function read_belt(belt, p, now)
           if k[3] ~= "normal" then
             p.quality[#p.quality + 1] = { uid, k[3] }
           end
+        elseif sent_uids and seen[uid] then
+          -- Read already this round (it moved on to this lane): it belongs here now.
+          sent_uids[#sent_uids + 1] = uid
         end
       end
     end
+    -- Read in full: if its end items are other items than last time, the line moved on by whole
+    -- slots and the lanes either side are read in full too (FORCE_MAX). From game reads only.
+    local rec = key and lanes and lanes[key]
+    if rec then
+      local shifted = rec[8] ~= nil and (rec[8] ~= first_uid or rec[9] ~= last_uid)
+      rec[8], rec[9], rec[10] = first_uid, last_uid, round.start
+      if shifted and (round.forced or 0) < FORCE_MAX then
+        -- The belts either side (belt_neighbours: LuaTransportLine's input_lines and output_lines
+        -- name the ends of the whole segment of straight belts in 2.1.23, skipping the belts between).
+        local q = round.force_q or {}
+        round.force_q = q
+        -- A splitter's or an underground's lanes don't line up with a belt's by number (a belt's
+        -- lane 1 feeds a splitter's 3; a splitter moves items from its lane 4 to its 6): with
+        -- more than two lanes on either side, every lane of it is read (2.1.23, the owner's save).
+        if #lines > 2 then
+          for o = 1, #lines do
+            if o ~= i then
+              q[#q + 1] = { belt, o }
+            end
+          end
+        end
+        local ok, nb = pcall(function() return belt.belt_neighbours end)
+        if ok and nb then
+          for _, list in pairs({ nb.inputs or {}, nb.outputs or {} }) do
+            for _, e in pairs(list) do
+              local count = #lines > 2 and 8 or (e.valid and e.get_max_transport_line_index() or 0)
+              if count > 2 then
+                for o = 1, count do
+                  q[#q + 1] = { e, o }
+                end
+              else
+                q[#q + 1] = { e, i }
+              end
+            end
+          end
+        end
+      end
+    end
+    if sent_uids then
+      lane_uids[key] = sent_uids
+      lane_special[key] = special or nil
+      if #p.raw == wrote_from then
+        p.emptied[#p.emptied + 1] = key
+      end
+    end
+    end
+    end
+    ::next_line::
   end
-  return items, units + items * (1 + WRITE_UNITS)
+  -- What counts towards the cap: its items (stacks), held ones too, and a weight a lane.
+  return items + held + #lines * M.lane_weight, units + items * (1 + WRITE_UNITS)
 end
 
 -- Ends the round at the start of ring `ring`: what was read of it is dropped, and `fr` says the
@@ -316,6 +580,14 @@ end
 local function cut(round, ring)
   round.cut, round.done = ring, true
   round.items = round.ring_items
+  -- Lanes checked in the ring that is dropped are read in full next time: the client won't have
+  -- what they hold now.
+  local lanes = storage.f3d.bl
+  if lanes then
+    for _, key in ipairs(round.ring_keys) do
+      lanes[key] = nil
+    end
+  end
   local p = payload(round)
   if not p then
     return
@@ -325,7 +597,10 @@ local function cut(round, ring)
     p.raw[j] = nil
   end
   for j = n + 1, #p.vx do
-    p.vx[j], p.vy[j], p.at[j] = nil, nil, nil
+    p.vx[j], p.vy[j], p.at[j], p.lk[j], p.st[j] = nil, nil, nil, nil, nil
+  end
+  for j = p.mark[4] + 1, #p.emptied do
+    p.emptied[j] = nil
   end
   for j = p.mark[2] + 1, #p.fresh do
     p.fresh[j] = nil
@@ -337,7 +612,10 @@ local function cut(round, ring)
   if p.written > n then
     local keep = floor(n / M.items_per_message)
     for j = keep + 1, #p.bodies do
-      p.bodies[j] = nil
+      p.bodies[j], p.tails[j], p.emptied_upto[j] = nil, nil, nil
+    end
+    if (p.emptied_upto[keep] or 0) > #p.emptied then
+      p.emptied_upto[keep] = #p.emptied
     end
     p.written = keep * M.items_per_message
   end
@@ -350,15 +628,63 @@ local function write_parts(p, target, all)
   end
 end
 
+-- One lane queued by a line that moved on (read_belt's FORCE_MAX): {belt, line index}, read in
+-- full if it is within the square and wasn't read in full this round. Returns what read_belt does,
+-- or 0, 0.
+local function force_lane(entry, p, now, round)
+  local belt, i = entry[1], entry[2]
+  if not (belt and belt.valid and belt.unit_number) or i > belt.get_max_transport_line_index() then
+    return 0, 0
+  end
+  local pos = belt.position
+  local dx, dy = pos.x - round.fx, pos.y - round.fy
+  local ring = floor(math.max(dx < 0 and -dx or dx, dy < 0 and -dy or dy))
+  if ring >= (round.cut or round.r) then
+    return 0, 0
+  end
+  local lanes = storage.f3d.bl
+  if not lanes then
+    return 0, 0
+  end
+  local rec = lanes[belt.unit_number * LANE_KEYS + i]
+  if rec and rec[10] == round.start then
+    return 0, 0  -- read in full already this round
+  end
+  round.forced = (round.forced or 0) + 1
+  if round.forced > FORCE_MAX then
+    return 0, 0
+  end
+  return read_belt(belt, p, now, round, lanes, { [i] = true })
+end
+
 -- Reads belts (finding the next band's when one runs out) until `budget` units are spent or the
 -- round is done.
 local function read(round, budget, now, surface)
   local p = payload(round)
-  local cap = M.max_items
+  -- The client's Belt updates (-1: Unlimited, every belt within its distance), else the mod's own.
+  local cap = storage.f3d.bi_cap or M.max_items
+  if cap < 0 then
+    cap = math.huge
+  end
   local spent = 0
   while spent < budget do
     if round.i > #round.belts then
       if round.last_band then
+        -- Lanes along lines that moved on, read in full before the update goes (see FORCE_MAX).
+        local q = round.force_q
+        if q and #q > 0 then
+          local nl = table.remove(q)
+          spent = spent + BELT_UNITS
+          round.units = round.units + BELT_UNITS
+          local n, units = force_lane(nl, p, now, round)
+          round.items = round.items + n
+          round.units = round.units + units
+          spent = spent + units
+          if p then
+            write_parts(p, round.target)
+          end
+          goto continue
+        end
         round.done = true
         return
       end
@@ -368,9 +694,9 @@ local function read(round, budget, now, surface)
     else
       local ring = round.rings[round.i]
       if ring ~= round.ring then
-        round.ring, round.ring_items = ring, round.items
+        round.ring, round.ring_items, round.ring_keys = ring, round.items, {}
         if p then
-          p.mark = { #p.raw / 4, #p.fresh, #p.quality }
+          p.mark = { #p.raw / 4, #p.fresh, #p.quality, #p.emptied }
         end
       end
       local belt = round.belts[round.i]
@@ -378,11 +704,15 @@ local function read(round, budget, now, surface)
       spent = spent + BELT_UNITS
       round.units = round.units + BELT_UNITS
       if belt.valid then
-        local n, units = read_belt(belt, p, now)
+        local n, units = read_belt(belt, p, now, round, storage.f3d.bl)
         round.items = round.items + n
         round.units = round.units + units
         spent = spent + units
-        if round.items > cap then
+        local limit = cap
+        if round.prev then
+          limit = ring < round.prev and cap * KEEP or cap * GROW
+        end
+        if round.items > limit then
           -- Back to the last whole ring: everything inside it, nothing of this one.
           cut(round, ring)
           return
@@ -394,6 +724,7 @@ local function read(round, budget, now, surface)
         end
       end
     end
+    ::continue::
   end
 end
 
@@ -411,15 +742,16 @@ end
 
 -- Sends the round as one update, stamped `now`. What was written out for another tick (the
 -- `rate` level changed the job's ticks meanwhile) is written again.
-local function emit(round, now, period)
+local function emit(round, now, period, lanes_left)
   local p = payload(round)
   pay = nil
+  line_cache, next_cache = next_cache, {}
   if not p then
     return -- loaded mid-round: nothing to send this time
   end
   local k = now
   if round.target ~= now then
-    p.bodies, p.written = {}, 0
+    p.bodies, p.tails, p.written, p.emptied_upto = {}, {}, 0, {}
   end
   -- An item that moved from a belt read later in the round on to one read earlier was read on
   -- neither. Missing from an update, the client would stop it for one and then jump it on, so an
@@ -438,17 +770,42 @@ local function emit(round, now, period)
         raw[m + 1], raw[m + 2], raw[m + 3], raw[m + 4] = uid, c[1], c[4], c[5]
         local j = m / 4 + 1
         vx[j], vy[j], at[j] = c[7], c[8], c[6]
+        p.lk[j] = 0
+        p.st[j] = c[10]
       end
     end
   end
   write_parts(p, k, true)
+  if p.lanes and #p.emptied > (p.emptied_upto[#p.bodies] or 0) then
+    -- Lanes read with nothing to send after the last part: one more part, with no items.
+    local ln = {}
+    for x = (p.emptied_upto[#p.bodies] or 0) + 1, #p.emptied do
+      ln[#ln + 1] = p.emptied[x] .. ",0"
+    end
+    p.bodies[#p.bodies + 1] = ""
+    p.tails[#p.bodies] = ',"ln":[' .. table.concat(ln, ",") .. "]"
+    p.emptied_upto[#p.bodies] = #p.emptied
+  end
   known = seen
+  if p.lanes then
+    -- Lanes no longer read (out of the square, their belt gone): the client drops their items.
+    local dropped = {}
+    for key, rec in pairs(lanes_left or {}) do
+      dropped[#dropped + 1] = key
+    end
+    table.sort(dropped)
+    for _, key in ipairs(dropped) do
+      lane_uids[key], lane_special[key] = nil, nil
+    end
+    p.tails[1] = (p.tails[1] or ',"ln":[]') .. ',"dl":[' .. table.concat(dropped, ",") .. "]"
+  end
   -- Like `mv`, every update is the full list, split into parts that share the tick `k`. Each part
   -- says which square it covers, so the client hands over to the far lane icons exactly where
   -- these items stop rather than round its own focus, which runs ahead while panning, and
   -- `p`, the ticks between updates, so the client draws items far enough behind to glide evenly.
   transport.send_parts("bi", k, p.bodies,
-    ',"fx":' .. world.fixed(round.fx) .. ',"fy":' .. world.fixed(round.fy) .. ',"fr":' .. floor(round.cut or round.r) .. ',"p":' .. period)
+    ',"fx":' .. world.fixed(round.fx) .. ',"fy":' .. world.fixed(round.fy) .. ',"fr":' .. floor(round.cut or round.r) .. ',"p":' .. period,
+    p.tails)
   -- Quality (Space Age) only where some item has one, plus one empty list to clear it.
   local quality, fresh = p.quality, p.fresh
   if #quality > 0 or bq_sent then
@@ -468,10 +825,14 @@ local function emit(round, now, period)
 end
 
 -- Tiles round the focus within which every item is sent: the client's choice (`bfar` n) if it
--- made one, else the map setting.
+-- made one, as it asked (owner: the setting goes as far as it says, no other cap than its own Belt
+-- updates); else the map setting, within the focus radius.
 local function near_radius()
   local s = storage.f3d
-  return math.min(s.near_r or settings.global["f3d-detail-radius"].value, s.focus.r)
+  if s.near_r then
+    return s.near_r
+  end
+  return math.min(settings.global["f3d-detail-radius"].value, s.focus.r)
 end
 
 -- Units read a tick: the client's choice (`bfar` u) if it made one. A big u reads a round in one
@@ -504,6 +865,12 @@ function M.tick()
     b = { m = 1, dues = 0, work = 0 }
     s.bi = b
   end
+  -- Lanes are kept for a client that keeps them (`bl` in its hello).
+  if s.client and s.client.bl then
+    s.bl = s.bl or {}
+  else
+    s.bl = nil
+  end
   local now = game.tick
   -- The job's ticks: every detail interval, stretched by the client's `rate` level. An update is
   -- sent on every m-th of them, m as many as a round of this size needs.
@@ -517,15 +884,19 @@ function M.tick()
   if round and round.si ~= surface.index then
     round, b.round = nil, nil
   end
-  -- A round starts as late as it can and still be read by the tick it is due.
+  -- A round starts as late as it can and still be read by the tick it is due; with lanes kept, a
+  -- tick earlier every other update (M.lane_jitter: the time between a lane's checks is then odd).
   local target = b.last and b.last + b.m * period
-  if not round and (due or (target and now >= target - ticks_for(b.work) + 1)) then
+  local early = (s.bl and M.lane_jitter and (b.count or 0) % 2 == 1) and 1 or 0
+  if not round and (due or (target and now >= target - ticks_for(b.work) + 1 - early)) then
     local f = s.focus
     round = { start = now, si = surface.index, fx = f.x, fy = f.y, r = r, target = due and now or target,
-      band = 0, belts = {}, rings = {}, i = 1, ring = -1, ring_items = 0, items = 0, units = 0 }
+      band = 0, belts = {}, rings = {}, i = 1, ring = -1, ring_items = 0, items = 0, units = 0,
+      ring_keys = {}, count = b.count or 0, prev = b.fr }
     b.round = round
-    pay = { id = now, raw = {}, vx = {}, vy = {}, at = {}, bodies = {}, written = 0,
-      fresh = {}, quality = {}, seen = {}, mark = { 0, 0, 0 } }
+    pay = { id = now, raw = {}, vx = {}, vy = {}, at = {}, bodies = {}, written = 0, lk = {}, st = {}, tails = {}, emptied = {},
+      lanes = s.bl ~= nil,
+      fresh = {}, quality = {}, seen = {}, held_only = {}, emptied_upto = {}, mark = { 0, 0, 0 } }
   end
   if round and not round.done then
     read(round, due and units_per_tick() * DUE_BURST or units_per_tick(), now, surface)
@@ -553,8 +924,37 @@ function M.tick()
   elseif need < b.m and ticks_for(work * 1.1) <= (b.m - 1) * period then
     b.m = b.m - 1
   end
-  emit(round, now, b.m * period)
+  -- Lanes not checked this round are forgotten (and the client told to drop them).
+  local left = nil
+  if s.bl then
+    left = {}
+    for key, rec in pairs(s.bl) do
+      if rec[4] ~= round.start then
+        left[key] = true
+      end
+    end
+    for key in pairs(left) do
+      s.bl[key] = nil
+    end
+  end
+  -- Lanes along lines that moved on, not read yet (the cap or time ended the round first): read
+  -- now, so the update has whole lines (FORCE_MAX).
+  local q = round.force_q
+  if q and #q > 0 then
+    local p = payload(round)
+    while #q > 0 do
+      local _, units = force_lane(table.remove(q), p, now, round)
+      round.units = round.units + units
+    end
+    if p then
+      write_parts(p, round.target)
+    end
+  end
+  emit(round, now, b.m * period, left)
   b.round, b.dues, b.last, b.work = nil, 0, now, work
+  -- Where this update stopped, if the cap stopped it: the next keeps it unless well past the cap.
+  b.fr = round.cut and not round.short and floor(round.cut) or nil
+  b.count = (b.count or 0) + 1
 end
 
 
@@ -565,7 +965,10 @@ end
 -- round and round, and a chunk is sent only when what its lanes carry changed:
 -- {t = "bfar", cx, cy, l = [x, y (1/256 tile), direction, lane 1 item id, lane 2 item id, ...],
 -- c = [lane 1 count, lane 2 count, ...]}, 0 for an empty lane; an empty l clears the chunk. The
--- counts (items on that lane of that belt, at most 4) let the client draw a full belt full.
+-- counts (items on that lane of that belt, at most 4) let the client draw a full belt full,
+-- and h how high to pile them when there are more items than that (stack inserters' stacks). By
+-- items, not stacks: counted by stacks, a lane of a few stacks of 4 drew a few icons with holes
+-- between them, which from afar read as gaps on a full belt (owner: "we didn't have gaps in 0.1.1").
 
 -- What a far lane carries changes slowly and is drawn small, so a round over the chunks starts at
 -- most every FAR_ROUND_TICKS, reading far_belts_per_tick belts a tick. A belt costs about 12-25 us
@@ -590,10 +993,11 @@ local function far_state()
   return s.far
 end
 
--- A full lane holds 4 items a belt.
+-- A full lane holds 4 items (or stacks) a belt.
 local FAR_MAX_COUNT = 4
 
--- The item a lane carries most of, by id (0: empty), and how many items it holds.
+-- The item a lane carries most of, by id (0: empty), how many icons it gets (its items, at most
+-- FAR_MAX_COUNT) and how high they are piled (the items over those icons, rounded up: 1 to MAX_STACK).
 local function lane_item(line)
   local best, most, all = nil, 0, 0
   for _, it in pairs(line.get_contents()) do
@@ -602,7 +1006,9 @@ local function lane_item(line)
       best, most = it.name, it.count
     end
   end
-  return best and registry.item_id(best) or 0, math.min(all, FAR_MAX_COUNT)
+  local icons = math.min(all, FAR_MAX_COUNT)
+  local pile = icons > 0 and math.min(MAX_STACK, ceil(all / icons)) or 1
+  return best and registry.item_id(best) or 0, icons, pile
 end
 
 -- Starts reading a chunk: its belts. Returns the chunk and the belts it holds.
@@ -616,14 +1022,16 @@ local function far_find(surface, types, key, c)
       belts[#belts + 1] = belt
     end
   end
-  return { key = key, c = c, belts = belts, i = 1, l = {}, counts = {} }, #found
+  return { key = key, c = c, belts = belts, i = 1, l = {}, counts = {}, piles = {} }, #found
 end
 
 -- Reads up to `budget` of the chunk's belts; returns how many it read. Each belt's numbers are
 -- written as text as it is read: turning a busy chunk's 5,000 numbers into text at its end cost
 -- 7 ms in one tick (2.1.23, the owner's save).
 local function far_read(cur, budget)
-  local belts, l, counts = cur.belts, cur.l, cur.counts
+  -- (A chunk begun before piles were read has none yet.)
+  cur.piles = cur.piles or {}
+  local belts, l, counts, piles = cur.belts, cur.l, cur.counts, cur.piles
   local small = transport.small
   local read = 0
   while read < budget and cur.i <= #belts do
@@ -632,12 +1040,14 @@ local function far_read(cur, budget)
     read = read + 1
     if belt.valid then
       local p = belt.position
-      local a, na = lane_item(belt.get_transport_line(1))
-      local b, nb = lane_item(belt.get_transport_line(2))
+      local a, na, ha = lane_item(belt.get_transport_line(1))
+      local b, nb, hb = lane_item(belt.get_transport_line(2))
       if a ~= 0 or b ~= 0 then
         l[#l + 1] = world.fixed(p.x) .. "," .. world.fixed(p.y) .. "," .. small[belt.direction] .. ","
           .. (small[a] or a) .. "," .. (small[b] or b)
         counts[#counts + 1] = small[na] .. "," .. small[nb]
+        piles[#piles + 1] = small[ha] .. "," .. small[hb]
+        cur.stacked = cur.stacked or ha > 1 or hb > 1
       end
     end
   end
@@ -647,23 +1057,35 @@ end
 -- A chunk read whole: sent if what its lanes carry changed.
 local function far_finish(cur, far_sent)
   local l, counts = table.concat(cur.l, ","), table.concat(cur.counts, ",")
-  local sig = l .. ";" .. counts
+  -- How high each lane's stacks are piled, only where some are (a stack inserter's).
+  local h = cur.stacked and #cur.piles == #cur.counts and (',"h":[' .. table.concat(cur.piles, ",") .. "]") or ""
+  local sig = l .. ";" .. counts .. h
   if sig ~= (far_sent[cur.key] or ";") then
     far_sent[cur.key] = sig
-    transport.send_text("bfar", ',"cx":' .. cur.c[1] .. ',"cy":' .. cur.c[2] .. ',"l":[' .. l .. '],"c":[' .. counts .. "]")
+    transport.send_text("bfar", ',"cx":' .. cur.c[1] .. ',"cy":' .. cur.c[2] .. ',"l":[' .. l .. '],"c":[' .. counts .. "]" .. h)
   end
 end
 
--- {r, n, u}: how far (tiles) the client draws belt lanes, 0 stopping them; n, optional, how far it
--- draws every item (MAX_NEAR at most; without n the map setting f3d-detail-radius); u, optional,
--- the units of belt items read a tick (units_per_tick).
-local MAX_NEAR = 96
+-- {r, n, m, u}: how far (tiles) the client draws belt lanes, 0 stopping them; n, optional, how far
+-- every item may be sent moving (MAX_NEAR at most; without n the map setting f3d-detail-radius,
+-- within the focus radius); m, optional, the most items (stacks) and lanes an update reads before
+-- it stops at the last whole ring (the client's Belt updates; 0: no cap, every belt within n;
+-- without m, M.max_items): items move as far out as m allows and the far lane icons start there;
+-- u, optional, the units of belt items read a tick (units_per_tick).
+local MAX_NEAR = 640
+local MIN_CAP, MAX_CAP = 200, 100000
 
 function M.set_far(cmd)
   local s = storage.f3d
   s.far_r = math.max(0, math.min(1024, math.floor(tonumber(cmd.r) or 0)))
   local n = tonumber(cmd.n)
   s.near_r = n and math.max(0, math.min(MAX_NEAR, math.floor(n))) or nil
+  local m = tonumber(cmd.m)
+  if m == 0 then
+    s.bi_cap = -1  -- Unlimited
+  else
+    s.bi_cap = m and m > 0 and math.max(MIN_CAP, math.min(MAX_CAP, math.floor(m))) or nil
+  end
   local u = tonumber(cmd.u)
   s.bi_units = u and u > 0 and math.max(100, math.min(10000000, math.floor(u))) or nil
   local far = far_state()
@@ -735,6 +1157,7 @@ end
 function M.far_reset()
   storage.f3d.far = nil
   storage.f3d.bi = nil
+  storage.f3d.bl = nil
   pay = nil
 end
 

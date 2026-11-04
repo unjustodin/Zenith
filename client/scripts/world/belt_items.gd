@@ -10,11 +10,28 @@ extends Node3D
 ## belts round the square the items come from are indexed from world.gd's records on the job's
 ## thread, chunk by chunk as they change.
 ##
+## Lanes that didn't change aren't sent again (`bl` in the hello; belt_items.lua): each part says
+## which lane its items came from (`ln`), and an item whose lane wasn't in an update stays where it
+## is until its lane comes again or is dropped (`dl`). On a busy base most lanes are backed up and
+## hold still, so the mod reads and sends only the few that move.
+##
 ## Thousands of items can be in view, so the gliding happens on the GPU (item_cards.gd,
 ## belt_path.gdshaderinc): an update writes each item's position and how far it moves until the
 ## next one (a straight step, or for the few that turn, its path's points in a texture), and a
 ## frame only sets how far along that the items are. Each item keeps its slot in its type's
 ## MultiMesh, so an update rewrites a whole slot only for items that just arrived.
+##
+## The hand-over to the far lane icons (belt_lanes.gd, `lanes`) never leaves a belt bare and
+## never draws it twice (owner): an item that falls outside the square an update covers stays,
+## held where it is, until its chunk's icons are made (and at most KEEP_UPDATES updates), and the
+## icons of a chunk that still has such items stay hidden; both change when a job's result is
+## drawn, in the same frame, as does the square the icons are hidden in. Items of a kind whose look
+## isn't made yet aren't drawn, so their icons stay shown inside the square until it is.
+##
+## A stack (a stack inserter puts up to 4 items in one place on a belt: one entry, one unique id;
+## `bi` st says its size) is drawn as a pile, as Factorio draws it: the item and up to three more
+## copies, each a step higher (the kind's pile_step()), each in a slot of its own (Layer) that
+## follows the item's glide.
 ##
 ## The work of an update (decoding it, moving every item, filling the buffers: 20-30 ms for 6,000
 ## items on a real busy base) runs on a worker thread (Job), on State that only the job touches
@@ -60,6 +77,13 @@ const PATH_WIDTH := 1024
 const MAX_ROWS := 256
 ## An item still under the ground: two points there, not shown.
 const HIDDEN := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+## An item kept outside the square for its chunk's icons (see above) goes after this many updates
+## whatever happens (a chunk whose icons never come: no far lanes there).
+const KEEP_UPDATES := 40
+## Factorio's max_belt_stack_size (utility constants): the highest pile.
+const MAX_STACK := 4
+## A pile's copies turn this much more each, so a pile of models doesn't look like one tall block.
+const PILE_TURN := 0.45
 
 
 class Item:
@@ -71,6 +95,7 @@ class Item:
 	var slot := -1  # in its kind's MultiMesh, or -1 before it has one
 	var seen := -1  # the update (State.frame) it was last in
 	var missed := 0  # updates missed in a row
+	var lane := 0  # the lane (bi ln key) it was last sent in, 0 none: held while that lane isn't sent
 	var hint: BeltPaths.Belt = null  # the belt `from` is on, where the next route starts looking
 	## Its glide along its lane's path when that isn't straight: points (x, y, z offsets from
 	## `from`, and 1 where it shows), the route's pieces and length (where it is part way).
@@ -93,6 +118,25 @@ class Item:
 	var run_min := 0.0
 	var run_max := 0.0
 	var run_gen := -1
+	## The stack's size (bi st, 1 when not listed) and its copies above it, one Layer each.
+	var count := 1
+	var layers: Array = []
+	var kept := 0  # updates it has been kept outside the square, waiting for its chunk's icons
+	## Its glide in the last update it was in, when straight: what it goes on with in an update
+	## it is missing from (carry_missing()).
+	var last_step := Vector3.ZERO
+	## Its path's place in the paths' texture in the _write() numbered code_at (its layers share it).
+	var code := 0.0
+	var code_at := -1
+
+
+## One copy in a pile, k steps above its item, in a slot of the item's kind.
+class Layer:
+	var it: Item
+	var k := 1
+	var slot := -1
+	var c := 1.0
+	var s := 0.0
 
 
 class Kind:
@@ -102,8 +146,9 @@ class Kind:
 	var emptied: Array[int] = []  # slots to hide
 	var buf := PackedFloat32Array()  # the MultiMesh's instances, cap of them
 	var cap := 0
-	var lift := Vector3.ZERO  # item_cards.gd's lift() and turns() for this kind, once known
+	var lift := Vector3.ZERO  # item_cards.gd's lift(), turns() and pile_step() for this kind, once known
 	var turns := false
+	var pile := 0.07
 	var known := false
 
 
@@ -121,6 +166,11 @@ class State:
 	var period := 0
 	var snap := SNAP_DISTANCE
 	var graph := BeltPaths.Graph.new()
+	## Lane key -> the update (frame) it was last sent in. An item of a lane not sent in an update
+	## is held: it stays where it is, not counted missing.
+	var lane_frame := {}
+	## Chunks with items kept outside the square, waiting for their far icons (Job.held_chunks).
+	var held_chunks := {}
 
 
 ## One job: the messages queued since the last, applied to State on a worker thread.
@@ -132,8 +182,11 @@ class Job:
 	var fold := 0.0
 	var fold_tick := 0.0  # the drawn tick then, where the new glide starts
 	var full := false  # every slot written again (the MultiMeshes were dropped)
-	var known := {}  # item id -> [lift, turns] for kinds item_cards.gd has made
+	var known := {}  # item id -> [lift, turns, pile step] for kinds item_cards.gd has made
 	var watch: Array = []  # unique ids whose positions position_of() wants
+	## Chunks whose far icons are made (belt_lanes.gd), or null with far icons off: items outside
+	## the square go at once.
+	var far_built = null
 	var kinds = null  # belt prototypes (BeltPaths.Graph.kinds) when they changed
 	var index: Array = []  # [chunk, its entity records, whole] to index
 	var drops: Array = []  # chunks no longer indexed
@@ -155,6 +208,8 @@ class Job:
 	var updated := 0  # items in the job's messages (those not routed, fresh or put somewhere went on along a known run)
 	var fresh := 0  # items new to the client, and items missing from an update
 	var missing := 0
+	var held := 0  # items kept in place because their lane wasn't sent (bl)
+	var held_chunks := {}  # chunks with items kept outside the square, waiting for their icons
 	## Glides by how they went: belts not known (straight, as before), straight along a lane, along a
 	## lane's path, put where they are (not reachable), and moved too far to glide.
 	var routes := PackedInt32Array([0, 0, 0, 0, 0])
@@ -162,6 +217,7 @@ class Job:
 	var fold_usec := 0
 	static var hidden_path := PackedFloat32Array(HIDDEN)  # shared, never written to
 	var gen := -1  # the graph's generation in this job (the belts don't change while it runs)
+	static var _writes := 0  # numbers each _write(), for Item.code_at
 
 	func run() -> void:
 		var t0 := Time.get_ticks_usec()
@@ -177,11 +233,14 @@ class Job:
 		index_usec = Time.get_ticks_usec() - t0
 		for msg: Dictionary in msgs:
 			_handle(msg)
+		if began:
+			carry_missing()
 		var t1 := Time.get_ticks_usec()
 		_write()
 		write_usec = Time.get_ticks_usec() - t1
 		count = state.items.size()
 		square = state.square
+		held_chunks = state.held_chunks.duplicate()
 		for uid in watch:
 			var it: Item = state.items.get(uid)
 			if it != null:
@@ -210,6 +269,24 @@ class Job:
 		if not (list is Array):
 			return
 		var deltas := int(msg.get("z", 0)) == 1
+		# Which lane each run of items came from: [key, count, ...]; every lane named was sent now.
+		var ln = msg.get("ln")
+		var by_lane := ln is Array
+		var run := 0
+		var left := 0
+		var lane := 0
+		if by_lane:
+			for j in range(0, (ln as Array).size() - 1, 2):
+				state.lane_frame[int(ln[j])] = state.frame
+		var dl = msg.get("dl")
+		if dl is Array and not (dl as Array).is_empty():
+			_drop_lanes(dl)
+		# Stacks' sizes by unique id; every item of the part not listed is a single one.
+		var sizes := {}
+		var st = msg.get("st")
+		if st is Array:
+			for j in range(0, (st as Array).size() - 1, 2):
+				sizes[int(st[j])] = int(st[j + 1])
 		var uid := 0
 		var item_id := 0
 		var x := 0
@@ -227,14 +304,87 @@ class Job:
 				item_id = int(list[i + 1])
 				x = int(list[i + 2])
 				y = int(list[i + 3])
-			_update(uid, item_id, Vector3(x / 256.0, height + LAYER_STEP * posmod(uid, LAYERS), y / 256.0))
+			if by_lane:
+				while left == 0 and run + 1 < (ln as Array).size():
+					lane = int(ln[run])
+					left = int(ln[run + 1])
+					run += 2
+				if left > 0:
+					left -= 1
+				else:
+					lane = 0
+			var it := _update(uid, item_id, Vector3(x / 256.0, height + LAYER_STEP * posmod(uid, LAYERS), y / 256.0), lane)
+			_set_count(it, int(sizes.get(uid, 1)))
 			i += 4
 		updated += list.size() / 4
 
-	func _update(uid: int, item_id: int, pos: Vector3) -> void:
+	## Items the update left out go on at their last pace along the straight run they are on,
+	## instead of stopping. The bridge reads
+	## belts over several ticks on a busy base (Smooth belt items off, which Hold 60 UPS does under
+	## load), so an item moving from a belt read later to one read earlier is in neither reading; it
+	## stopped for an update and then jumped to where it was (owner: items "stop and jump around").
+	## An item that was in the update keeps its new glide as its pace for next time. Held items
+	## (their lane not sent: bl) stay still, as their belt is.
+	func carry_missing() -> void:
+		for uid in state.items:
+			var it: Item = state.items[uid]
+			if it.seen == state.frame:
+				it.last_step = it.step if it.path.is_empty() else Vector3.ZERO
+			elif not (it.lane != 0 and _held(it)) and it.path.is_empty() and it.missed < MISSING_FRAMES and not _under(it) 					and _stays_on_run(it, it.from + it.last_step):
+				it.step = it.last_step
+
+	## Whether `to` is still on the straight run of belts the item is on (a known run, this graph):
+	## carried on past its end it would leave the belt where it turns.
+	func _stays_on_run(it: Item, to: Vector3) -> bool:
+		if state.graph.tiles.is_empty():
+			return true  # belts not known (tests): items glide straight anyway
+		if it.run_gen != gen:
+			return false
+		if it.run_z:
+			return absf(to.x - it.from.x) <= ON_LANE and to.z >= it.run_min and to.z <= it.run_max
+		return absf(to.z - it.from.z) <= ON_LANE and to.x >= it.run_min and to.x <= it.run_max
+
+	## Whether an item missing from the last update was held there: its lane wasn't sent, and the
+	## item was in that lane's last sending (one that left the lane since is missing).
+	func _held(it: Item) -> bool:
+		var f = state.lane_frame.get(it.lane)
+		return f != null and int(f) != state.frame and it.seen >= int(f)
+
+	## Lanes no longer read (out of the square, their belt gone): their items go at once.
+	func _drop_lanes(keys: Array) -> void:
+		var drop := {}
+		for k in keys:
+			drop[int(k)] = true
+			state.lane_frame.erase(int(k))
+		var gone: Array = []
+		for uid in state.items:
+			var it: Item = state.items[uid]
+			if it.lane != 0 and drop.has(it.lane):
+				if _wait_for_icons(it):
+					it.lane = 0
+				else:
+					gone.append(uid)
+		for uid in gone:
+			_unplace(state.items[uid])
+			state.items.erase(uid)
+
+	## Whether an item outside the square stays (held) until its chunk's far icons are made.
+	func _wait_for_icons(it: Item) -> bool:
+		if far_built == null or it.kept >= KEEP_UPDATES:
+			return false
+		var c := Vector2i(floori(it.from.x / 32.0), floori(it.from.z / 32.0))
+		if (far_built as Dictionary).has(c):
+			return false
+		state.held_chunks[c] = true
+		return true
+
+	func _update(uid: int, item_id: int, pos: Vector3, lane := 0) -> Item:
 		var it: Item = state.items.get(uid)
+		if it != null:
+			it.lane = lane
 		if it == null:
 			it = Item.new()
+			it.lane = lane
 			it.item_id = item_id
 			it.from = pos
 			var a := ItemCards.yaw_for(uid)
@@ -246,7 +396,7 @@ class Job:
 			fresh += 1
 			it.missed = 0
 			it.seen = state.frame
-			return
+			return it
 		it.seen = state.frame
 		it.missed = 0
 		if it.item_id != item_id:
@@ -260,13 +410,37 @@ class Job:
 			if it.run_z:
 				if absf(pos.x - it.from.x) <= ON_LANE and pos.z >= it.run_min and pos.z <= it.run_max:
 					it.step = Vector3(0.0, 0.0, pos.z - it.from.z)
-					return
+					return it
 			elif absf(pos.z - it.from.z) <= ON_LANE and pos.x >= it.run_min and pos.x <= it.run_max:
 				it.step = Vector3(pos.x - it.from.x, 0.0, 0.0)
-				return
+				return it
 		var tg := Time.get_ticks_usec()
 		_glide(it, pos)
 		route_usec += Time.get_ticks_usec() - tg
+		return it
+
+	## A stack of n: its pile has n - 1 copies above it, each in a slot of its kind.
+	func _set_count(it: Item, n: int) -> void:
+		n = clampi(n, 1, MAX_STACK)
+		it.count = n
+		if it.slot < 0 or it.layers.size() == n - 1:
+			return
+		var kind: Kind = state.kinds[it.item_id]
+		while it.layers.size() > n - 1:
+			var gone: Layer = it.layers.pop_back()
+			kind.slots[gone.slot] = null
+			kind.free.append(gone.slot)
+			kind.emptied.append(gone.slot)
+			gone.slot = -1
+		while it.layers.size() < n - 1:
+			var layer := Layer.new()
+			layer.it = it
+			layer.k = it.layers.size() + 1
+			var a := atan2(it.s, it.c) + PILE_TURN * layer.k
+			layer.c = cos(a)
+			layer.s = sin(a)
+			_put(kind, layer)
+			it.layers.append(layer)
 
 	## From where the item is drawn to `pos`: along its lane, or (belts not known there) straight.
 	## Along its lanes it goes as far as they lead to pos, which may be further than a glide would
@@ -414,20 +588,27 @@ class Job:
 		if kind == null:
 			kind = Kind.new()
 			state.kinds[it.item_id] = kind
-		if kind.free.is_empty():
-			it.slot = kind.slots.size()
-			kind.slots.append(it)
-		else:
-			it.slot = kind.free.pop_back()
-			kind.slots[it.slot] = it
-		kind.fresh.append(it)
+		_put(kind, it)
 
+	## An Item or a Layer into a free slot of its kind.
+	func _put(kind: Kind, e) -> void:
+		if kind.free.is_empty():
+			e.slot = kind.slots.size()
+			kind.slots.append(e)
+		else:
+			e.slot = kind.free.pop_back()
+			kind.slots[e.slot] = e
+		kind.fresh.append(e)
+
+	## Takes an item and its pile's copies out of their kind (_set_count() puts the copies back).
 	func _unplace(it: Item) -> void:
 		var kind: Kind = state.kinds[it.item_id]
-		kind.slots[it.slot] = null
-		kind.free.append(it.slot)
-		kind.emptied.append(it.slot)
-		it.slot = -1
+		for e in [it] + it.layers:
+			kind.slots[e.slot] = null
+			kind.free.append(e.slot)
+			kind.emptied.append(e.slot)
+			e.slot = -1
+		it.layers = []
 
 	## A new update begins: every item stops where it is drawn and waits for its new position;
 	## items gone for MISSING_FRAMES updates are taken off, and at once those outside the square
@@ -441,6 +622,7 @@ class Job:
 		var t := 0.0 if began else fold
 		began = true
 		updates += 1
+		state.held_chunks = {}  # found again below, for the items still kept
 		var gone: Array = []
 		var edge := sq.z + SQUARE_SLACK
 		for uid in state.items:
@@ -462,7 +644,18 @@ class Job:
 			# (else HIDDEN: it stays where it is, out of sight)
 			it.step = Vector3.ZERO
 			if sq.z >= 0.0 and (absf(it.from.x - sq.x) > edge or absf(it.from.z - sq.y) > edge):
-				gone.append(uid)
+				if _wait_for_icons(it):
+					it.kept += 1
+					it.seen = state.frame
+					it.missed = 0
+					it.lane = 0
+				else:
+					gone.append(uid)
+			elif it.seen != state.frame and it.lane != 0 and _held(it):
+				# Its lane wasn't sent: it holds still where it is (`bl`).
+				it.seen = state.frame
+				it.missed = 0
+				held += 1
 			elif it.seen != state.frame:
 				it.missed += 1
 				missing += 1
@@ -483,6 +676,8 @@ class Job:
 		var tex := PackedFloat32Array()
 		var texels := 0
 		var room := PATH_WIDTH * MAX_ROWS
+		_writes += 1
+		var writing := _writes
 		for item_id in state.kinds:
 			var kind: Kind = state.kinds[item_id]
 			var look: Array = known.get(item_id, [])
@@ -492,16 +687,17 @@ class Job:
 				kind.known = true
 				kind.lift = look[0]
 				kind.turns = look[1]
-				kind.fresh = kind.slots.filter(func(it) -> bool: return it != null)
+				kind.pile = float(look[2]) if look.size() > 2 else 0.07
+				kind.fresh = kind.slots.filter(func(e) -> bool: return e != null)
 			if full:
-				kind.fresh = kind.slots.filter(func(it) -> bool: return it != null)
+				kind.fresh = kind.slots.filter(func(e) -> bool: return e != null)
 				kind.emptied = kind.free.duplicate()
 			_compact(kind)
 			var n := kind.slots.size()
 			if n > kind.cap:
 				kind.cap = maxi(n, kind.cap * 2)
 				kind.buf.resize(kind.cap * STRIDE)
-				kind.fresh = kind.slots.filter(func(it) -> bool: return it != null)
+				kind.fresh = kind.slots.filter(func(e) -> bool: return e != null)
 				kind.emptied = kind.free.duplicate()
 			if not kind.known:
 				unknown.append(item_id)
@@ -514,17 +710,27 @@ class Job:
 				if i < kind.cap:
 					ItemCards.clear_slot(buf, i * STRIDE)
 			kind.emptied.clear()
-			for it: Item in kind.fresh:
-				if it.slot >= 0:
-					ItemCards.write(buf, it.slot * STRIDE, it.from + up, it.c if turns else 1.0, it.s if turns else 0.0, it.step)
+			var pile := kind.pile
+			for e in kind.fresh:
+				if e.slot < 0:
+					continue
+				if e is Layer:
+					var layer: Layer = e
+					ItemCards.write(buf, e.slot * STRIDE, layer.it.from + up + Vector3(0.0, pile * layer.k, 0.0),
+						layer.c if turns else 1.0, layer.s if turns else 0.0, layer.it.step)
+				else:
+					var item: Item = e
+					ItemCards.write(buf, e.slot * STRIDE, item.from + up, item.c if turns else 1.0, item.s if turns else 0.0, item.step)
 			kind.fresh.clear()
 			var o := 0
-			for it in kind.slots:
-				if it != null:
+			for e in kind.slots:
+				if e != null:
+					var it: Item = e if e is Item else (e as Layer).it
+					var lift := up.y + (pile * (e as Layer).k if e is Layer else 0.0)
 					var p: Vector3 = it.from
 					var d: Vector3 = it.step
 					buf[o + 3] = p.x + up.x
-					buf[o + 7] = p.y + up.y
+					buf[o + 7] = p.y + lift
 					buf[o + 11] = p.z + up.z
 					buf[o + 12] = d.x
 					buf[o + 13] = d.y
@@ -532,14 +738,17 @@ class Job:
 					if it.path.is_empty():
 						buf[o + 15] = 0.0
 					else:
-						var path: PackedFloat32Array = it.path
-						var k := path.size() / 4
-						var code := 0.0
-						if texels + k <= room:
-							code = 1.0 + texels * 64 + (k - 2)
-							tex.append_array(path)
-							texels += k
-						buf[o + 15] = code
+						# A pile's copies share their item's path (written once a _write()).
+						if it.code_at != writing:
+							it.code_at = writing
+							var path: PackedFloat32Array = it.path
+							var k := path.size() / 4
+							it.code = 0.0
+							if texels + k <= room:
+								it.code = 1.0 + texels * 64 + (k - 2)
+								tex.append_array(path)
+								texels += k
+						buf[o + 15] = it.code
 				o += STRIDE
 			kind.buf = buf
 			written.append([item_id, buf, n, kind.cap])
@@ -558,10 +767,10 @@ class Job:
 		var n := kind.slots.size()
 		if kind.free.size() > 64 and kind.free.size() * 2 > n:
 			var packed := []
-			for it in kind.slots:
-				if it != null:
-					it.slot = packed.size()
-					packed.append(it)
+			for e in kind.slots:
+				if e != null:
+					e.slot = packed.size()
+					packed.append(e)
 			kind.slots = packed
 			kind.fresh = packed.duplicate()
 			kind.free.clear()
@@ -592,6 +801,8 @@ var world: WorldMirror = null:
 
 var _cards := ItemCards.new()
 var _state := State.new()
+## belt_lanes.gd (main.gd sets it): the far icons this layer hands over to.
+var lanes: Node = null
 var _belt_dirty := {}  # Vector2i chunk -> true: its entities changed since it was indexed
 var _indexed := {}  # Vector2i chunk -> whether its whole snapshot was indexed, as the job's graph has it
 var _kinds_count := -1  # protos.entities.size() when the belt prototypes were last given to a job
@@ -599,6 +810,12 @@ var _given: Array = []  # index_chunk()'s chunks for the next job
 var _paths: ImageTexture = null
 var _paths_image: Image = null  # what _paths was last made from (tests)
 var _inbox: Array = []  # messages waiting for the next job
+## A big update comes in many parts, which the bridge's message handling may spread over frames
+## (bridge.gd HANDLE_USEC). They go to a job together, once all have come (or the next update
+## does): a job with only some of them stopped the other items until theirs came, a frame or two
+## later, and then they jumped on, splitting full lanes apart (owner: "the odd moments they split").
+var _parts: Array = []
+var _parts_tick := -1
 var _job: Job = null
 var _task := -1
 var _known := {}  # item id -> [lift, turns], kinds item_cards.gd has made
@@ -633,7 +850,7 @@ var _bench_jobs := 0
 ## glided (Job.routes: not known, straight on a lane, along a path, snapped, moved too far).
 var stats := {"frames": 0, "main_usec": 0, "jobs": 0, "worker_usec": 0, "worst_job_usec": 0, "routes": [0, 0, 0, 0, 0],
 	"indexed": 0, "index_usec": 0, "write_usec": 0, "cached": 0, "fresh": 0, "missing": 0, "runs": 0, "walks": [0, 0, 0, 0, 0, 0, 0],
-	"route_usec": 0, "fold_usec": 0}
+	"route_usec": 0, "fold_usec": 0, "held": 0}
 
 
 func _ready() -> void:
@@ -651,6 +868,8 @@ func _exit_tree() -> void:
 
 
 func reset() -> void:
+	_parts = []
+	_parts_tick = -1
 	_wait(false)
 	var height := _state.height
 	_state = State.new()
@@ -681,8 +900,27 @@ func covered() -> Vector3:
 
 
 func handle(msg: Dictionary) -> void:
-	_inbox.append(msg)
 	_clock.heard(float(msg.get("k", 0)), float(msg.get("p", 0)))
+	var parts := int(msg.get("parts", 1))
+	if parts <= 1:
+		_flush_parts()
+		_inbox.append(msg)
+		return
+	var k := int(msg.get("k", 0))
+	if k != _parts_tick:
+		_flush_parts()  # an update a part never came for goes as it is
+		_parts_tick = k
+	_parts.append(msg)
+	if _parts.size() >= parts:
+		_flush_parts()
+
+
+## The parts held so far to the next job.
+func _flush_parts() -> void:
+	if not _parts.is_empty():
+		_inbox.append_array(_parts)
+		_parts = []
+	_parts_tick = -1
 
 
 ## Waits for the running job and draws what it made (`apply`), or drops it (leaving the tree, a
@@ -815,6 +1053,8 @@ func _start(delta: float) -> void:
 	job.known = _known.duplicate()
 	job.watch = _watch.keys()
 	_watch.clear()
+	if lanes != null and is_instance_valid(lanes) and lanes.distance > 0:
+		job.far_built = lanes.built_chunks()
 	_index_belts(job)
 	# Where the glide will be when this job's result is drawn: about a frame from now (now when the
 	# job runs here and is drawn this frame).
@@ -836,10 +1076,14 @@ func _apply(job: Job) -> void:
 		_cards.put(int(w[0]), w[1], int(w[2]), int(w[3]))
 	for item_id in job.unknown:
 		_cards.prepare(item_id)
-		_known[item_id] = [_cards.lift(item_id), _cards.turns(item_id)]
+		_known[item_id] = [_cards.lift(item_id), _cards.turns(item_id), _cards.pile_step(item_id)]
 	_rewrite = _rewrite or not job.unknown.is_empty()
 	_count = job.count
 	_square = job.square
+	if lanes != null and is_instance_valid(lanes):
+		# The icons change in this frame too: the square they leave out, the chunks still held by
+		# items waiting for them, and the kinds not drawn yet (their icons stay shown).
+		lanes.hand_over(job.square, job.held_chunks, job.unknown)
 	_positions = job.positions
 	if job.paths != null:
 		_paths_image = job.paths
@@ -863,6 +1107,7 @@ func _apply(job: Job) -> void:
 	stats["runs"] = _state.graph.runs
 	stats["walks"] = Array(_state.graph.walks)
 	stats["missing"] += job.missing
+	stats["held"] += job.held
 	stats["worst_job_usec"] = maxi(stats["worst_job_usec"], job.usec)
 	for k in 5:
 		stats["routes"][k] += job.routes[k]

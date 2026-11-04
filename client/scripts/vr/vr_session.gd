@@ -50,6 +50,7 @@ const SNAP_TURN_DEGREES := 30.0
 const STICK_DEAD_ZONE := 0.25
 const LASER_LENGTH := 400.0  # world units, when it hits nothing
 const PANEL_DISTANCE := 0.9  # metres in front of the head when summoned
+const GroundHeight := preload("res://scripts/world/ground_height.gd")
 
 ## main.gd: in_game(), rig, avatar, hud.
 var main: Node
@@ -404,7 +405,7 @@ func _pointer() -> void:
 	else:
 		panel.leave()
 		main.rig.vr_pointer = [from, dir]
-		var ground = Plane(Vector3.UP, 0.0).intersects_ray(from, dir)
+		var ground = GroundHeight.ray_hit(from, dir)
 		if ground != null:
 			length = from.distance_to(ground)
 	# A cylinder along the controller's -z, as long as the ray, a few millimetres thick at any zoom.

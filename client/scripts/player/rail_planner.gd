@@ -16,6 +16,7 @@ const Visuals := preload("res://scripts/world/visuals.gd")
 const ModelLibrary := preload("res://scripts/world/model_library.gd")
 const GhostShader := preload("res://shaders/ghost.gdshader")
 const ItemIcons := preload("res://scripts/world/item_icons.gd")
+const GroundHeight := preload("res://scripts/world/ground_height.gd")
 
 const DATA_PATH := "res://data/rail_extensions.json"
 ## Rails each piece costs (items_to_place_this, checked in 2.1.23).
@@ -421,19 +422,15 @@ func _show_arrows(list: Array) -> void:
 func _arrow_material(kind: String) -> Material:
 	if _arrow_materials.has(kind):
 		return _arrow_materials[kind]
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.no_depth_test = true
-	mat.render_priority = 2
+	var mat := GroundHeight.overlay_material(2)  # over everything, on the hills
 	var data := ItemIcons.factorio_data_dir()
 	var path := data.path_join("core/graphics/arrows").path_join(ARROW_FILES.get(kind, ARROW_FILES["free"])) if data != "" else ""
 	var image := Image.load_from_file(path) if path != "" and FileAccess.file_exists(path) else null
 	if image != null:
-		mat.albedo_texture = ImageTexture.create_from_image(image)
+		mat.set_shader_parameter(&"picture", ImageTexture.create_from_image(image))
+		mat.set_shader_parameter(&"use_picture", true)
 	else:
-		mat.albedo_color = Color(0.2, 0.9, 0.2, 0.85) if kind == "free" else Color(0.95, 0.75, 0.2, 0.85)
+		mat.set_shader_parameter(&"tint", Color(0.2, 0.9, 0.2, 0.85) if kind == "free" else Color(0.95, 0.75, 0.2, 0.85))
 	_arrow_materials[kind] = mat
 	return mat
 

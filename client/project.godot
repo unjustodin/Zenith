@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="Zenith"
-config/version="0.1.1"
+config/version="0.1.2"
 config/description="3D client for a running Factorio game, via the factorio-3d-bridge mod."
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.4", "Forward Plus")
@@ -42,21 +42,17 @@ limits/global_shader_variables/buffer_size=524288
 
 [shader_globals]
 
-f3d_fade={
+f3d_ground={
+"type": "sampler2D",
+"value": ""
+}
+f3d_ground_on={
 "type": "float",
 "value": 0.0
 }
-f3d_fade_eye={
-"type": "vec3",
-"value": Vector3(0, 0, 0)
-}
-f3d_fade_target={
-"type": "vec3",
-"value": Vector3(0, 0, 0)
-}
-f3d_fade_cursor={
-"type": "vec3",
-"value": Vector3(0, 0, 0)
+f3d_ground_rect={
+"type": "vec4",
+"value": Vector4(0, 0, 1, 0)
 }
 f3d_anim_time={
 "type": "vec2",

@@ -1,4 +1,5 @@
 extends MeshInstance3D
+const GroundHeight := preload("res://scripts/world/ground_height.gd")
 ## Factorio's selection and placement marks, drawn flat just above the ground and over everything
 ## (no depth test, like Factorio's overlays on its sprites): the selection box's corner brackets
 ## round the hovered entity or vehicle; the yellow arrows of inserters (where they pick up and
@@ -32,14 +33,8 @@ var _mesh := ImmediateMesh.new()
 func _ready() -> void:
 	mesh = _mesh
 	cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	var m := StandardMaterial3D.new()
-	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	m.vertex_color_use_as_albedo = true
-	m.cull_mode = BaseMaterial3D.CULL_DISABLED
-	m.no_depth_test = true
-	m.render_priority = 10
-	material_override = m
+	# Unshaded, see-through, over everything, and lifted onto the hills (ground_height.gd).
+	material_override = GroundHeight.overlay_material(10)
 
 
 ## A Factorio vector (x east, y south) turned clockwise by a 16-way direction.

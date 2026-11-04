@@ -15,6 +15,7 @@ extends RefCounted
 ##   updates   ask the bridge for lighter updates (addon_updates.gd)
 ##   storage   the add-on's data, per save and for all saves (addon_storage.gd)
 ##   settings  (1.1) settings shown on the add-on's page of the Add-ons menu (addon_settings.gd)
+##   terrain   (1.2) hills under the flat world, drawn only (addon_terrain.gd)
 
 const AddonLoader := preload("res://scripts/addons/addon_loader.gd")
 const AddonCamera := preload("res://scripts/addons/addon_camera.gd")
@@ -24,6 +25,7 @@ const AddonUi := preload("res://scripts/addons/addon_ui.gd")
 const AddonUpdates := preload("res://scripts/addons/addon_updates.gd")
 const AddonStorage := preload("res://scripts/addons/addon_storage.gd")
 const AddonSettings := preload("res://scripts/addons/addon_settings.gd")
+const AddonTerrain := preload("res://scripts/addons/addon_terrain.gd")
 
 ## A game started (the world is being received) or ended (back to the menu).
 signal game_started
@@ -51,6 +53,7 @@ var ui: AddonUi
 var updates: AddonUpdates
 var storage: AddonStorage
 var settings: AddonSettings
+var terrain: AddonTerrain
 
 var _host  # addon_host.gd
 
@@ -70,6 +73,7 @@ func _setup(host, manifest: Dictionary) -> void:
 	updates = AddonUpdates.new(host, self)
 	storage = AddonStorage.new(host, self)
 	settings = AddonSettings.new(host, self)
+	terrain = AddonTerrain.new(host, self)
 
 
 ## Everything the add-on set up through the API, taken away again (it was switched off).
@@ -80,6 +84,7 @@ func _teardown() -> void:
 	updates.clear()
 	view._release()
 	settings._remove_all()
+	terrain.clear()
 
 
 ## A game is on (the world may still be arriving).

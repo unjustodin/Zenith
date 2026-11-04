@@ -7,6 +7,7 @@ shader_type spatial;
 render_mode blend_mix, depth_draw_opaque, cull_disabled, unshaded, shadows_disabled;
 
 #include "res://shaders/mover_records.gdshaderinc"
+#include "res://shaders/ground_height.gdshaderinc"
 
 const vec3 SHADOW_OFFSET = vec3(0.99, 0.0, 0.83);
 const float SHADOW_SQUASH = 0.01;
@@ -18,7 +19,7 @@ void vertex() {
 	vec3 v = vec3(VERTEX.x, VERTEX.y * SHADOW_SQUASH, VERTEX.z);
 	vec3 n = NORMAL;
 	mover_place(v, n, s, MODEL_MATRIX[3].xyz);
-	VERTEX = v;
+	VERTEX = ground_lift(v, MODEL_MATRIX);
 }
 
 void fragment() {

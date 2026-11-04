@@ -4,6 +4,7 @@ local registry = require("scripts.registry")
 local transport = require("scripts.transport")
 local world = require("scripts.world")
 local rate = require("scripts.rate")
+local alt_mode = require("scripts.alt_mode")
 
 local M = {}
 
@@ -242,6 +243,17 @@ function M.register()
           and world.is_subscribed(corpse.surface, corpse.position) then
         transport.send_reliable({ t = "add", e = world.record(corpse) })
       end
+    end
+  end)
+
+  -- Alt-mode's icon (issue #9) after settings pasted in the real game or a player there closing the
+  -- machine's window (where its recipe or filters are set). The bridge's own paste sends `upd`.
+  script.on_event(defines.events.on_entity_settings_pasted, function(event)
+    alt_mode.check(event.destination)
+  end)
+  script.on_event(defines.events.on_gui_closed, function(event)
+    if event.entity then
+      alt_mode.check(event.entity)
     end
   end)
 

@@ -250,6 +250,47 @@ step("alt_mode", function(p)
 	p.game_view_settings.show_entity_info = true
 	return {}
 end, {show_entity_info = true})
+-- Issue #9: Alt-mode's arrows (Interface settings: inserter, pump and machine arrows, the player's
+-- own defaults): inserters four ways, machines with fluid recipes, a boiler, pumps and a recycler,
+-- on the lab. Opt-in: --only alt_arrows.
+step("alt_arrows", function(p)
+	local s = lab()
+	local o = {x = 120, y = 120}
+	for _, e in pairs(s.find_entities_filtered{area = {{o.x - 32, o.y - 20}, {o.x + 32, o.y + 20}}, type = "character", invert = true}) do
+		e.destroy()
+	end
+	p.force.enable_all_recipes()
+	local function make(name, x, y, dir, recipe)
+		local e = s.create_entity{name = name, position = {o.x + x, o.y + y}, direction = dir or defines.direction.north, force = "player"}
+		if e and recipe then pcall(function() e.set_recipe(recipe) end) end
+		return e
+	end
+	-- inserters between chests, each way round
+	for i, d in ipairs({defines.direction.north, defines.direction.east, defines.direction.south, defines.direction.west}) do
+		local x = -24 + i * 3
+		make("iron-chest", x, -8)
+		make(i % 2 == 0 and "fast-inserter" or "inserter", x, -7, d)
+		make("iron-chest", x, -6)
+		make("long-handed-inserter", x, -3, d)
+	end
+	make("chemical-plant", -8, -6, defines.direction.north, "sulfuric-acid")
+	make("chemical-plant", -4, -6, defines.direction.east, "lubricant")
+	make("oil-refinery", 3, -6, defines.direction.north, "advanced-oil-processing")
+	make("assembling-machine-2", 9, -7, defines.direction.north, "electric-engine-unit")
+	make("boiler", 14, -7, defines.direction.north)
+	make("pump", 18, -7, defines.direction.north)
+	make("pump", 20, -7, defines.direction.east)
+	make("foundry", -9, 3, defines.direction.north, "molten-iron")
+	make("recycler", -3, 3, defines.direction.north)
+	make("recycler", 1, 3, defines.direction.east)
+	make("cryogenic-plant", 7, 3, defines.direction.north, "ammonia-rocket-fuel")
+	make("electromagnetic-plant", 14, 3, defines.direction.north, "holmium-solution")
+	make("storage-tank", 20, 3, defines.direction.north)
+	local c = character_of(p)
+	if c then p.teleport({o.x, o.y + 9}, s) end
+	p.game_view_settings.show_entity_info = true
+	return {}
+end, {show_entity_info = true, position = {120, 118}, zoom = 0.9}, true)
 step("remote_view", function(p)
 	local c = character_of(p)
 	p.set_controller{type = defines.controllers.remote, position = {c.position.x + 20, c.position.y}, surface = c.surface}

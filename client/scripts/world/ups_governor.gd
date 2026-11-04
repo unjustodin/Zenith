@@ -18,6 +18,7 @@ extends Node
 ## through within that budget, so it can't make a slow tick when it comes, it only fills in more
 ## slowly. Reacting once the UPS has dropped would be too late for those (the owner's point).
 
+const BeltCaps := preload("res://scripts/world/belt_lanes.gd")
 const Settings := preload("res://scripts/menu/settings.gd")
 const AddonRequests := preload("res://scripts/addons/addon_requests.gd")
 
@@ -26,8 +27,8 @@ signal changed
 ## Steps from the first taken to the last, cheapest in looks for the UPS they buy first (measured on
 ## the owner's save; REPORT-ACCT2.md). [knob, value]: the knob's value is at most the smallest of
 ## the steps taken. map: how much longer the minimap waits between refreshes; entity: tiles round
-## the focus with moving things and machine states; far: far belt lanes (tiles); near: every item
-## on belts (tiles); view: chunks drawn round the focus; fps: the frame rate cap (frees CPU for the
+## the focus with moving things and machine states; far: the belt item distance (tiles); updates:
+## the most belt items sent moving (Belt updates); view: chunks drawn round the focus; fps: the frame rate cap (frees CPU for the
 ## server on the same PC); rate: the bridge sends its costliest updates less often (`rate`, 1-3),
 ## which the client glides over, so it goes first. The last value of each knob is its floor.
 const STEPS := [
@@ -36,11 +37,11 @@ const STEPS := [
 	["map", 2.0],
 	["rate", 3],
 	["entity", 128],
-	["near", 16],
+	["updates", 3000],
 	["far", 96],
 	["map", 4.0],
 	["entity", 96],
-	["near", 8],
+	["updates", 1500],
 	["far", 64],
 	["entity", 64],
 	["view", 7],
@@ -48,8 +49,8 @@ const STEPS := [
 	["view", 5],
 	["fps", 45],
 ]
-const LABELS := {"map": "minimap refreshes %s× apart", "entity": "entity distance %s", "far": "far belt items %s",
-	"near": "belt items in full %s", "view": "view distance %s", "fps": "FPS limit %s",
+const LABELS := {"map": "minimap refreshes %s× apart", "entity": "entity distance %s", "far": "belt item distance %s",
+	"updates": "belt updates %s", "view": "view distance %s", "fps": "FPS limit %s",
 	"rate": "updates slowed to level %s"}
 
 const LOW := 57.0  # UPS under this, for HOLD_DOWN seconds, takes a step down
@@ -288,8 +289,8 @@ static func limit_with(knob: String, now: float, value: float) -> float:
 static func _player(knob: String) -> float:
 	match knob:
 		"entity": return float(Settings.get_value("graphics", "entity_radius"))
-		"far": return float(Settings.get_value("graphics", "belt_far_distance"))
-		"near": return float(Settings.get_value("graphics", "belt_near_distance"))
+		"far": return float(Settings.get_value("graphics", "belt_distance"))
+		"updates": return BeltCaps.cap_wanted(float(Settings.get_value("graphics", "belt_updates")))
 		"view": return float(Settings.get_value("graphics", "view_radius"))
 		"fps": return float(Settings.get_value("graphics", "fps_cap"))
 		"rate": return 0.0

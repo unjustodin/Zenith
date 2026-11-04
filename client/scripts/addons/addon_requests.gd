@@ -5,10 +5,10 @@ extends RefCounted
 ## back further when it runs slow: its limit() starts from what this gives.
 ##
 ## Knobs (the governor's names): rate (0-3: the bridge's costliest updates sent less often),
-## entity (tiles with moving things and machine states), near (tiles with every item on belts),
-## far (tiles with far belt icons), view (chunks drawn), map (how much longer the minimap waits).
+## entity (tiles with moving things and machine states), near (tiles within which belt items may
+## move), far (tiles with belt items at all), updates (the most belt items sent moving), view (chunks drawn), map (how much longer the minimap waits).
 
-const KNOBS := ["rate", "entity", "near", "far", "view", "map"]
+const KNOBS := ["rate", "entity", "near", "far", "view", "map", "updates"]
 ## Knobs that are held back by going up (a slow-down level, a refresh multiplier); the others by
 ## going down.
 const UPWARD := ["rate", "map"]

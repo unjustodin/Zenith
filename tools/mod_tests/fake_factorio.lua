@@ -64,7 +64,7 @@ local event_names = {
   "on_space_platform_built_entity", "script_raised_built", "script_raised_revive",
   "on_entity_cloned", "on_player_mined_entity", "on_robot_mined_entity",
   "on_space_platform_mined_entity", "on_entity_died", "on_post_entity_died", "script_raised_destroy",
-  "on_resource_depleted", "on_player_rotated_entity", "on_player_flipped_entity",
+  "on_resource_depleted", "on_player_rotated_entity", "on_player_flipped_entity", "on_entity_settings_pasted", "on_gui_closed",
   "on_player_built_tile", "on_robot_built_tile", "on_space_platform_built_tile",
   "on_player_mined_tile", "on_robot_mined_tile", "on_space_platform_mined_tile",
   "script_raised_set_tiles", "on_chunk_generated", "on_entity_damaged", "on_research_finished",
@@ -540,6 +540,11 @@ end
 -- Remnants: corpses buildings leave (LuaEntityPrototype.corpses: name -> prototype). The
 -- assembler's are its own; the chest and the lab share small-remnants.
 entity_protos["linked-belt"] = entity_proto("linked-belt", "linked-belt", 1, 1, { rotatable = true })
+-- Belts' speeds in tiles a tick, as 2.1.23's prototypes.
+for name, v in pairs({ ["transport-belt"] = 0.03125, ["fast-transport-belt"] = 0.0625, ["underground-belt"] = 0.03125,
+  splitter = 0.03125, ["linked-belt"] = 0.03125 }) do
+  entity_protos[name].belt_speed = v
+end
 entity_protos["assembling-machine-1-remnants"] = entity_proto("assembling-machine-1-remnants", "corpse", 3, 3,
   { unit_numbered = false })
 entity_protos["small-remnants"] = entity_proto("small-remnants", "corpse", 1, 1, { unit_numbered = false })
@@ -676,7 +681,9 @@ forces.player = setmetatable({
       ingredients = { { type = "item", name = "iron-gear-wheel", amount = 1 }, { type = "item", name = "iron-plate", amount = 1 } },
       products = { { type = "item", name = "transport-belt", amount = 2 } },
     }),
-    ["oil-processing"] = make_recipe("oil-processing", true, "oil-processing"),
+    ["oil-processing"] = make_recipe("oil-processing", true, "oil-processing", {
+      ingredients = { { type = "fluid", name = "crude-oil", amount = 100 } },
+      products = { { type = "fluid", name = "petroleum-gas", amount = 45 } } }),
     ["laser-turret"] = make_recipe("laser-turret", false, "crafting"),
     ["iron-plate"] = make_recipe("iron-plate", true, "smelting"),
   },
@@ -1208,27 +1215,53 @@ end
 -- front edge of the entity and run away from it, so their items are outside it.
 local belt_lines = setmetatable({}, { __mode = "k" }) -- entity -> {line index -> items}
 
+-- entity -> {line index -> {inputs, outputs}}: the lines either side, shared by every object for it.
+local line_links = setmetatable({}, { __mode = "k" })
+
 local function make_transport_line(e, index)
   local items = belt_lines[e][index]
+  line_links[e] = line_links[e] or {}
+  line_links[e][index] = line_links[e][index] or { inputs = {}, outputs = {} }
+  local links = line_links[e][index]
   local angle = e.direction / 16 * 2 * math.pi
   local fx, fy = math.sin(angle), -math.cos(angle)
   local rx, ry = -fy, fx
   -- As measured in 2.1.23 (live_check): a line's position 0 is at the belt's exit edge and grows
   -- backwards; the lanes are 0.234 tiles either side of the centre.
   local lane = (index % 2 == 1) and -0.234 or 0.234
-  return strict("LuaTransportLine", {
+  local line
+  line = strict("LuaTransportLine", {
     line_length = 1,
+    -- As in 2.1.23: item 1 is the front one (the lowest position), and the map position comes second.
+    get_item_position = function(k)
+      local sorted = {}
+      for _, it in ipairs(items) do
+        sorted[#sorted + 1] = it
+      end
+      table.sort(sorted, function(a, b) return a.position < b.position end)
+      local it = assert(sorted[k], "get_item_position: no item " .. tostring(k))
+      return it.position, line.get_line_item_position(it.position)
+    end,
     get_detailed_contents = function()
+      F.detailed_reads = (F.detailed_reads or 0) + 1
       local out = {}
       for _, it in ipairs(items) do
         out[#out + 1] = strict("DetailedItemOnLine", {
-          stack = strict("LuaItemStack", { valid_for_read = true, name = it.name, count = 1, spoil_percent = it.spoil or 0,
+          stack = strict("LuaItemStack", { valid_for_read = true, name = it.name, count = it.count or 1, spoil_percent = it.spoil or 0,
             quality = strict("LuaQualityPrototype", { name = it.quality or "normal" }) }),
           position = it.position,
           unique_id = it.unique_id,
         })
       end
       return out
+    end,
+    -- Every item on the line, stacks counted by their size.
+    get_item_count = function()
+      local n = 0
+      for _, it in ipairs(items) do
+        n = n + (it.count or 1)
+      end
+      return n
     end,
     -- Fast transfer on belts (ui_actions.lua): totals, taking items off, putting them on.
     get_contents = function()
@@ -1239,7 +1272,7 @@ local function make_transport_line(e, index)
           out[#out + 1] = { name = it.name, count = 0, quality = it.quality or "normal" }
           at[key] = out[#out]
         end
-        at[key].count = at[key].count + 1
+        at[key].count = at[key].count + (it.count or 1)
       end
       return out
     end,
@@ -1267,12 +1300,24 @@ local function make_transport_line(e, index)
         unique_id = F.next_item_id }
       return true
     end,
+    -- The lines either side along the belt (set by the harness: F.link_lines), the belt, equality.
+    input_lines = links.inputs,
+    output_lines = links.outputs,
+    owner = e,
+    valid = true,
+    line_equals = function(other)
+      return other ~= nil and rawequal(other.owner, e) and other.__index_of == index
+    end,
+    __index_of = index,
     get_line_item_position = function(position)
       local p = e.position
       local along = index <= 2 and 0.5 - position or 0.5 + position
       return { x = p.x + fx * along + rx * lane, y = p.y + fy * along + ry * lane }
     end,
   })
+  -- #line: the number of item stacks on it (2.1.23: a stack from a stack inserter is one entry).
+  getmetatable(line).__len = function() return #items end
+  return line
 end
 
 -- A LuaTrain of these carriages. Its schedule is a 2.x LuaSchedule: get_records (nil when
@@ -1835,6 +1880,13 @@ local function make_entity(surface, params)
       belt_lines[e][i] = {}
     end
     data.get_max_transport_line_index = function() return count end
+    data.belt_neighbours = setmetatable({}, { __index = function(_, k)
+      local links = F.belt_links[e]
+      if k == "inputs" or k == "outputs" then
+        return links and links[k] or {}
+      end
+      error("belt_neighbours has no " .. tostring(k), 2)
+    end })
     data.get_transport_line = function(i)
       assert(belt_lines[e][i], "get_transport_line: no line " .. tostring(i))
       return make_transport_line(e, i)
@@ -3678,9 +3730,27 @@ function F.add_decorative(surface, name, x, y, amount)
   surface.decoratives[#surface.decoratives + 1] = { name = name, x = x, y = y, amount = amount or 1 }
 end
 
-function F.put_on_belt(entity, line, name, position, unique_id, spoil, quality)
+function F.put_on_belt(entity, line, name, position, unique_id, spoil, quality, count)
   local items = belt_lines[entity][line]
-  items[#items + 1] = { name = name, position = position, unique_id = unique_id, spoil = spoil, quality = quality }
+  items[#items + 1] = { name = name, position = position, unique_id = unique_id, spoil = spoil, quality = quality, count = count }
+end
+
+-- Sets the size of a stack on a belt (an inserter took part of it: nothing moves).
+function F.set_stack_count(entity, line, unique_id, count)
+  for _, it in ipairs(belt_lines[entity][line]) do
+    if it.unique_id == unique_id then
+      it.count = count
+    end
+  end
+end
+
+-- Belt a feeds belt b (their belt_neighbours, as the harness sets them).
+F.belt_links = setmetatable({}, { __mode = "k" })
+function F.link_belts(a, b)
+  F.belt_links[a] = F.belt_links[a] or { inputs = {}, outputs = {} }
+  F.belt_links[b] = F.belt_links[b] or { inputs = {}, outputs = {} }
+  table.insert(F.belt_links[a].outputs, b)
+  table.insert(F.belt_links[b].inputs, a)
 end
 
 -- Moves an item along its line (as the belt carries it), or off the belt with position nil.

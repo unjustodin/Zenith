@@ -77,6 +77,16 @@ starts in the angled view, and the camera is yours to move:
 | F5 | First person, and back |
 | F7 | Perspective or orthographic, for the view you're in (the map's remote view or the normal one) |
 
+The right mouse button mines whatever is under it, trains, wagons, cars, tanks and spidertrons
+too: they go into your inventory with what is inside them (fuel, cargo), and the rails stay.
+
+Alt (or the ALT button on the shortcut bar) is Factorio's Alt-mode: every machine you can see
+shows what it makes or lets through (recipes, inserter, splitter and filter chest filters), however
+big the base, and the moment it comes into view. As in Factorio, machines also show arrows where
+fluids go in and out (the connections their recipe uses), pumps the way they pump, and a recycler
+the side it drops onto; inserters' pickup and drop arrows are off by default (Settings → Interface
+→ Alt-mode turns each kind on or off, as Factorio's Interface settings do).
+
 Hovering a building shows Factorio's entity info on the right: its status, recipe, modules and
 beacons, and for powered buildings "Consumes electricity" with the Electricity bar; hovering a
 roboport draws lines to the roboports it is linked to. On a space platform (and in the map view of
@@ -97,8 +107,8 @@ Factorio window).
   your character), each chunk's buildings are drawn as one simplified mesh with no moving parts,
   which costs far fewer draws when the camera is pulled back over a big base. Trees, ore and nests
   keep their own models. Off draws every building in full however far it is.
-- **Graphics → Preset** (Low, Medium, High, Ultra) sets shadows, ambient occlusion, level of detail,
-  the distances and clouds together; **Shadows** alone (Off to Ultra) sets how far and how sharp
+- **Graphics → Preset** (Low, Medium, High, Ultra) sets shadows, level of detail, the distances and
+  clouds together, and turns ambient occlusion off; **Shadows** alone (Off to Ultra) sets how far and how sharp
   the sun's shadows are.
 - **Graphics → Merged materials (may help when CPU-bound)** (off): each model is drawn as one
   surface with one material instead of one per material, so the renderer has far fewer draws to
@@ -116,8 +126,10 @@ Factorio window).
   asks the bridge for less for a while (shorter distances, fewer minimap refreshes, then a lower
   frame rate) and gives it back when the game recovers. Your settings stay as they are; F4 shows
   what is held back.
-- **Graphics → Items on belts**: 3D models or Factorio's icons. **Belt items in full** and **Belt
-  items far away** set how far they are drawn.
+- **Graphics → Items on belts**: 3D models or Factorio's icons. **Belt item distance** sets how far
+  items on belts are drawn; **Belt updates** how many of them move (from the character outwards:
+  past those, out to the distance, each lane shows icons of what it carries). A stack inserter's
+  stacks are drawn as piles, as Factorio draws them.
 - **Camera → View when a game starts** (Angled view, Factorio's view or First person) and
   **Projection** (the angled view in perspective or orthographic), **Projection on the map** (the
   remote view you zoom into from the map; F7 switches whichever view you're in) and **Furthest
@@ -143,6 +155,10 @@ key; right click clears). With two copies of one add-on (a folder and a zip, say
 version is used and its page says so. The Mods window lists them as well. Add-ons can move the camera and
 change what is shown, never the game itself. Writing one: [ADDONS.md](ADDONS.md).
 
+The download already has two in its `addons` folder: the Cinematic camera, switched on, and
+[Terrain Elevation](https://github.com/unjustodin/Terrain-Elevation) (hills under the world),
+switched off: turn it on in the Add-ons menu. Newer versions are on each add-on's releases page.
+
 An add-on that records in the background (the Cinematic camera's recorder) keeps Zenith drawing
 while its window is behind Factorio's: Zenith isn't minimised when it loses focus while it
 records. Don't minimise Zenith yourself while recording: a minimised window draws nothing, so
@@ -167,7 +183,7 @@ nothing is recorded meanwhile.
 | A game from the menu doesn't start | The message shows the lines of Factorio's log that matter. Check Settings → Factorio install, and that no other Factorio uses the same server data folder |
 | "Can't open UDP port 34201" | Other programs have it and 34202–34208, which the client tries by itself. Close other clients |
 | No item icons, flat-coloured ground, no sound | The client didn't find your Factorio install: set it in Settings → Factorio install |
-| The game stutters on a big base | Try Settings → Graphics → Recommended, or a lower Preset; keep Hold the game at 60 UPS on; lower View distance, Entity distance and Belt items in full |
+| The game stutters on a big base | Try Settings → Graphics → Recommended, or a lower Preset; keep Hold the game at 60 UPS on; lower View distance, Entity distance and Belt updates |
 | Something else | `/f3d-selftest` in Factorio's console checks the bridge in your game; RUNNING.md's Troubleshooting section has more |
 
 Zenith is a fan project, not made or endorsed by Wube Software. Factorio is theirs.

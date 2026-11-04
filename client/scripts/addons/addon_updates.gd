@@ -6,8 +6,9 @@ extends RefCounted
 ##   rate    0-3: the bridge's costliest updates (moving things, belt items, machine states...)
 ##           sent less often, each level twice as far apart; the client glides over the gaps
 ##   entity  tiles round the focus with moving things and machine states
-##   near    tiles round the focus where every item on belts is drawn (at least 8)
-##   far     tiles out to which belts show an icon of what they carry (0: none)
+##   near    tiles round the focus within which items on belts may move
+##   far     tiles out to which items on belts are drawn at all (0: none)
+##   updates the most belt items sent moving an update (Belt updates)
 ##   view    chunks drawn round the focus
 ##   map     how many times longer the minimap waits between refreshes
 

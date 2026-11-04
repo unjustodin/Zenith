@@ -57,6 +57,9 @@ g.F_from_json = from_json
 lua.execute(FAKE.read_text())
 g.package.path = str(MOD / "?.lua") + ";" + g.package.path
 lua.execute((MOD / "control.lua").read_text())
+# As in Factorio, `require` works only while control.lua is being loaded (a module requiring another
+# from inside a function stops the game).
+lua.execute('require = function(name) error("Require can not be used outside of control.lua parsing: " .. tostring(name)) end')
 F = g.F
 
 failures = []
@@ -328,12 +331,21 @@ check(items.get(8) == [iid["iron-gear-wheel"], 8 * 256 + 64, 700],
 # Too many items: the square shrinks to the last whole ring round the focus instead of stopping
 # wherever Factorio's belt order got to (whole patches of a dense base went bare).
 belt_mod = lua.eval('package.loaded["scripts.belt_items"]')
-belt_mod.max_items = 2
+# The cap counts each lane checked as well as the items: the belt 8 tiles out is 2 items and 2 lanes.
+belt_mod.max_items = 4
 tick(12)
 capped = of_type(take(), "bi")
 capped_items = {capped[0]["l"][i] for i in range(0, len(capped[0]["l"]), 4)} if capped else set()
 check(capped_items == {7, 8} and all(m.get("fr") == 9 for m in capped),
       f"over the cap, the nearest whole rings are sent (8 tiles out) and fr says the square shrank to 9: {sorted(capped_items)} {[m.get('fr') for m in capped]}")
+# The edge holds still: one more item inside it (5 against a cap of 4) keeps fr where it was rather
+# than flipping to the ring before (owner: the zones went back and forth standing still).
+F.put_on_belt(belt_e, 1, "iron-plate", 0.75, 77)
+tick(12)
+kept = of_type(take(), "bi")
+F.move_on_belt(belt_e, 1, 77, None)
+check(kept and all(m.get("fr") == 9 for m in kept),
+      f"a count a little over the cap keeps the last edge (fr 9): {[m.get('fr') for m in kept]}")
 belt_mod.max_items = 6000
 tick(6)
 plain = take()
@@ -350,7 +362,204 @@ for m in bi:
 check(bi and all(m.get("z") == 1 for m in bi) and coded == items,
       f"a client that asks for z gets the same items delta-coded: {coded}")
 
+
+def lane_update(msgs):
+    """{lane key: [unique ids]} sent in a bi update (ln runs over each part's items), and dl."""
+    lanes, dropped = {}, []
+    for m in of_type(msgs, "bi"):
+        l, prev, ids = m["l"], [0, 0, 0, 0], []
+        for i in range(0, len(l), 4):
+            prev = [p + d for p, d in zip(prev, l[i:i + 4])] if m.get("z") else l[i:i + 4]
+            ids.append(prev[0])
+        ln, at = m.get("ln", []), 0
+        for i in range(0, len(ln), 2):
+            lanes.setdefault(ln[i], []).extend(ids[at:at + ln[i + 1]])
+            at += ln[i + 1]
+        dropped += m.get("dl", [])
+    return lanes, dropped
+
+
+def last_update(msgs):
+    """lane_update of the latest bi update in msgs only (with lanes kept, every other round is read
+    a tick early, so a change made between ticks may show one update later)."""
+    bi = of_type(msgs, "bi")
+    k = max((m["k"] for m in bi), default=None)
+    return lane_update([m for m in msgs if m.get("t") != "bi" or m["k"] == k])
+
+
+# Lanes that don't change aren't read or sent again (`bl`): checked by count and end positions,
+# read once more to see they settled, then held until they change, are refreshed or dropped.
+lane_e = spawn("transport-belt", 11.5, 2.5, force="player", direction=4)
+F.put_on_belt(lane_e, 1, "copper-plate", 0.5, 12)
+belt_mod.lane_refresh = 1000
+send({"t": "hello", "v": 1, "sid": "s1", "w": 1, "z": 1, "bl": 1})
+belt_unit, under_unit, lane_unit = int(belt_e.unit_number), int(under_e.unit_number), int(lane_e.unit_number)
+k1, k2, ku1, kl1 = belt_unit * 8 + 1, belt_unit * 8 + 2, under_unit * 8 + 1, lane_unit * 8 + 1
+reads0 = F.detailed_reads or 0
+tick(6)
+first, _ = lane_update(take())
+check(first.get(k1) == [7] and first.get(k2) == [8] and first.get(ku1) == [9],
+      f"bl: every lane is sent in full at first, its items grouped by lane (ln: unit number * 8 + line): {first}")
+tick(6)
+second, _ = lane_update(take())
+check(second.get(k1) == [7] and second.get(ku1) == [9], f"bl: read once more unchanged, to see the lanes settled: {second}")
+reads1 = F.detailed_reads
+tick(6)
+msgs = take()
+third, dropped = lane_update(msgs)
+check(not third and not dropped and F.detailed_reads == reads1 and all(m["l"] == [] for m in of_type(msgs, "bi")),
+      f"bl: settled lanes are held: not read in full ({F.detailed_reads - reads1} reads), no items sent: {third}")
+line1 = belt_e.get_transport_line(1)
+line1.remove_item(lua.table_from({"name": "iron-plate"}))
+F.put_on_belt(belt_e, 1, "iron-plate", 0.125, 7)  # the same item, moved on
+tick(6)
+moved, _ = lane_update(take())
+check(set(moved) == {k1} and moved[k1] == [7], f"bl: a lane whose front item moved is sent again, alone: {moved}")
+line1.remove_item(lua.table_from({"name": "iron-plate"}))
+belt_mod.items_per_message = 1  # several parts: the emptied lane is read after the first is written
+tick(12)
+emptied_msgs = take()
+belt_mod.items_per_message = 300
+emptied, _ = last_update(emptied_msgs)
+check(emptied.get(k1) == [], f"bl: a lane emptied is sent with no items (ln count 0), whichever part it falls in: {emptied}")
+belt_mod.lane_refresh = 2
+tick(18)  # the first round may have been read before the change
+refreshed, _ = lane_update(take())
+check(k2 in refreshed and ku1 in refreshed, f"bl: held lanes are read again every lane_refresh updates: {sorted(refreshed)}")
+belt_mod.lane_refresh = 1000
+tick(6)
+take()
+lane_e.destroy()
+tick(12)
+_, dropped = lane_update(take())
+check(kl1 in dropped and k2 not in dropped, f"bl: a gone belt's lanes are dropped (dl): {dropped}")
+# A full lane flowing at its belt's speed looks exactly the same whenever its items moved a whole
+# number of gaps since the last check (in 2.1.23 full belts were held still on the client): such a
+# check reads the lane in full. A yellow belt checked every 8 ticks: 0.25 tiles, one gap.
+section_start = int(lua.eval("game.tick"))
+belt_mod.lane_jitter = False
+interval = g.settings["global"]["f3d-detail-interval"]
+old_interval = interval.value
+interval.value = 8
+flow_e = spawn("transport-belt", 13.5, 2.5, force="player", direction=4)
+kf = int(flow_e.unit_number) * 8 + 1
+flow_uids = []
+
+
+def flow_on():
+    """The lane's items replaced by the next four at the same places: it moved on one gap."""
+    for u in flow_uids:
+        F.move_on_belt(flow_e, 1, u, None)
+    base = 900 + 4 * len(flow_uids)
+    flow_uids[:] = [base + j for j in range(4)]
+    for j, u in enumerate(flow_uids):
+        F.put_on_belt(flow_e, 1, "iron-plate", 0.25 * j, u)
+
+
+take()
+blind0 = belt_mod.counts.blind
+flowing = []
+for _ in range(5):
+    flow_on()
+    tick(8)
+    lanes, _ = lane_update(take())
+    flowing.append(sorted(lanes.get(kf, [])) == sorted(flow_uids))
+check(all(flowing[1:]) and belt_mod.counts.blind > blind0,
+      f"bl: a full lane flowing whole gaps between checks is read in full every update, not held: {flowing}, "
+      f"{belt_mod.counts.blind - blind0} blind checks")
+# And every other round starts a tick early, so the time between two checks of a lane is odd: at
+# these belt speeds never a whole number of gaps.
+belt_mod.lane_jitter = True
+interval.value = old_interval
+tick(6)
+take()
+checked = []
+for _ in range(5):
+    tick(6)
+    take()
+    checked.append(int(g.storage.f3d.bl[kf][6]))
+gaps = [b - a for a, b in zip(checked, checked[1:])]
+check(sorted(set(gaps)) == [5, 7], f"bl: a lane's checks are 5 and 7 ticks apart in turn at a 6-tick interval: {gaps}")
+flow_e.destroy()
+tick(6)
+# Stacks (2.1.23: a stack inserter's stack of up to 4 is one entry on the belt, `#line` counting
+# entries): bi says each stack's size by unique id (st), and a stack an inserter takes part of is
+# read and sent again although nothing on the lane moved (the check counts the lane's items too).
+stack_e = spawn("transport-belt", 10.5, 4.5, force="player", direction=4)
+F.put_on_belt(stack_e, 1, "iron-plate", 0.5, 31, None, None, 4)
+F.put_on_belt(stack_e, 1, "iron-plate", 0.75, 32)
+ks1 = int(stack_e.unit_number) * 8 + 1
+
+
+def stacks(msgs):
+    out = {}
+    for m in of_type(msgs, "bi"):
+        st = m.get("st", [])
+        for i in range(0, len(st) - 1, 2):
+            out[st[i]] = st[i + 1]
+    return out
+
+
+tick(12)
+msgs = take()
+first_st, (first_ln, _) = stacks(msgs), last_update(msgs)
+check(first_st.get(31) == 4 and 32 not in first_st and first_ln.get(ks1) == [31, 32],
+      f"bi st: a stack's size by unique id, a single item not listed: {first_st} {first_ln.get(ks1)}")
+tick(12)
+take()
+tick(6)
+held_ln, _ = lane_update(take())
+F.set_stack_count(stack_e, 1, 31, 2)
+tick(12)
+msgs = take()
+taken_ln, _ = last_update(msgs)
+check(ks1 not in held_ln and taken_ln.get(ks1) == [31, 32] and stacks(msgs).get(31) == 2,
+      f"bl: a stack an inserter took part of is sent again with its new size: held {sorted(held_ln)}, then {taken_ln.get(ks1)} {stacks(msgs)}")
+stack_e.destroy()
+tick(12)
+take()
+# A line that moved on by whole slots looks the same on every belt (held); when one belt is read
+# in full later its items are others, so the belts either side are read in full too, in the same
+# update (owner: lines not moving together "over time").
+la = spawn("transport-belt", 10.5, 5.5, force="player", direction=4)
+lb = spawn("transport-belt", 11.5, 5.5, force="player", direction=4)
+F.link_belts(la, lb)
+F.put_on_belt(la, 1, "iron-plate", 0.5, 41)
+F.put_on_belt(lb, 1, "iron-plate", 0.5, 42)
+ka, kb = int(la.unit_number) * 8 + 1, int(lb.unit_number) * 8 + 1
+tick(24)
+take()
+held_both, _ = lane_update(take() or [])
+# The shuffle: 41 moves on to lb's place, a new 43 takes la's; then lb's count changes (an item added)
+# so lb alone would be read.
+F.move_on_belt(lb, 1, 42, None)
+F.move_on_belt(la, 1, 41, None)
+F.put_on_belt(lb, 1, "iron-plate", 0.5, 41)
+F.put_on_belt(la, 1, "iron-plate", 0.5, 43)
+tick(12)
+take()
+F.put_on_belt(lb, 1, "iron-plate", 0.75, 44)
+tick(6)
+shifted, _ = lane_update(take())
+check(shifted.get(kb) == [41, 44] and shifted.get(ka) == [43],
+      f"bl: a lane read in full whose items moved on has the lane behind it read in full too: {shifted}")
+la.destroy()
+lb.destroy()
+tick(12)
+take()
+# Back on the 6-tick phase the checks below were written for.
+tick((6 - (int(lua.eval("game.tick")) - section_start) % 6) % 6)
+take()
+belt_mod.lane_refresh = 64
+F.put_on_belt(belt_e, 1, "iron-plate", 0.25, 7)
+send({"t": "hello", "v": 1, "sid": "s1", "w": 1, "z": 1})
+tick(6)
+take()
+
 # Belts far away as one icon per lane (bfar), by what each lane carries, when it changes.
+# Lane 2 holds one stack of 4 and one of 2 (a stack inserter's): 6 items, 4 icons piled 2 high.
+F.put_on_belt(far_e, 2, "iron-plate", 0.5, 12, None, None, 4)
+F.put_on_belt(far_e, 2, "iron-plate", 0.25, 13, None, None, 2)
 send({"t": "bfar", "r": 200})
 tick(3)
 far_msgs = of_type(take(), "bfar")
@@ -358,11 +567,16 @@ far = {(m["cx"], m["cy"]): m["l"] for m in far_msgs}
 far_counts = {(m["cx"], m["cy"]): m.get("c") for m in far_msgs}
 far_row = next((far[(1, 0)][i:i + 5] for i in range(0, len(far.get((1, 0), [])), 5) if far[(1, 0)][i:i + 2] == [fixed(40.5), fixed(10.5)]), None)
 near_row = next((far[(0, 0)][i:i + 5] for i in range(0, len(far.get((0, 0), [])), 5) if far[(0, 0)][i:i + 2] == [fixed(8.5), fixed(2.5)]), None)
-check(far_row == [fixed(40.5), fixed(10.5), 0, iid["iron-plate"], 0] and near_row == [fixed(8.5), fixed(2.5), 4, iid["iron-plate"], iid["iron-gear-wheel"]],
+check(far_row == [fixed(40.5), fixed(10.5), 0, iid["iron-plate"], iid["iron-plate"]] and near_row == [fixed(8.5), fixed(2.5), 4, iid["iron-plate"], iid["iron-gear-wheel"]],
       f"bfar: each belt's place, direction and what its two lanes carry: {far}")
 near_i = next((i // 5 for i in range(0, len(far.get((0, 0), [])), 5) if far[(0, 0)][i:i + 2] == [fixed(8.5), fixed(2.5)]), None)
-check(far_counts.get((1, 0)) == [1, 0] and near_i is not None and far_counts[(0, 0)][near_i * 2:near_i * 2 + 2] == [1, 1],
-      f"bfar c: how many items each lane holds, so a full belt is drawn full: {far_counts}")
+check(far_counts.get((1, 0)) == [1, 4] and near_i is not None and far_counts[(0, 0)][near_i * 2:near_i * 2 + 2] == [1, 1],
+      f"bfar c: how many items each lane holds (at most 4), so a full belt is drawn full, stacks too: {far_counts}")
+far_piles = {(m["cx"], m["cy"]): m.get("h") for m in far_msgs}
+check(far_piles.get((1, 0)) == [1, 2] and far_piles.get((0, 0)) is None,
+      f"bfar h: how high each lane's icons are piled (6 items on 4 icons: 2), only for chunks with stacks: {far_piles}")
+F.move_on_belt(far_e, 2, 12, None)
+F.move_on_belt(far_e, 2, 13, None)
 tick(3)
 check(not of_type(take(), "bfar"), "bfar: a chunk is sent again only when what it carries changes")
 # A chunk dropped and subscribed again inside one round is sent again (the client forgot its lanes).
@@ -403,6 +617,25 @@ check(not any(m["l"] for m in of_type(take(), "bi")), "bfar n 4: no items 8 tile
 send({"t": "bfar", "r": 0})
 tick(6)
 check(any(m["l"] for m in of_type(take(), "bi")), "bfar without n: back to f3d-detail-radius")
+# Belt updates (bfar m): the most items and lanes an update reads before it stops at the last whole
+# ring, so items move as far out as that allows (n up to MAX_NEAR) and lane icons start there.
+send({"t": "bfar", "r": 0, "n": 400, "m": 50})
+tick(1)
+caps = [g.storage.f3d.bi_cap, g.storage.f3d.near_r]
+send({"t": "bfar", "r": 0, "n": 24, "m": 6000})
+tick(1)
+caps += [g.storage.f3d.bi_cap]
+send({"t": "bfar", "r": 0, "n": 24, "m": 0})
+tick(1)
+caps += [g.storage.f3d.bi_cap]
+belt_mod.max_items = 4  # the mod's own cap, which Unlimited must not use
+tick(11)  # with the tick above, the checks below keep the tick phase they were written for
+unlimited = of_type(take(), "bi")
+belt_mod.max_items = 6000
+send({"t": "bfar", "r": 0})
+tick(1)
+check(caps == [200, 400, 6000, -1] and g.storage.f3d.bi_cap is None and unlimited and all(m.get("fr") == 24 for m in unlimited),
+      f"bfar m: the client's cap of items and lanes (200 at least), n as asked (up to 640); 0 is Unlimited (every belt within n); without m the mod's own: {caps} {[m.get('fr') for m in unlimited]}")
 
 # Belt items are read over several ticks (a round), a slice of work units a tick, and sent as one
 # update stamped with the tick it is sent on: an item read early in the round is carried on to that
@@ -503,6 +736,7 @@ send({"t": "rate", "l": 0})
 belt_mod.units_per_tick = 40
 belt_mod.items_per_message = 2
 belt_mod.max_items = 10
+belt_mod.lane_weight = 0  # items alone, as these rings were laid out for
 extra = spawn("transport-belt", 12.5, -3.5, force="player", direction=4)
 F.put_on_belt(extra, 1, "iron-plate", 0.3, 800)
 F.put_on_belt(extra, 2, "iron-plate", 0.3, 801)
@@ -514,6 +748,7 @@ ks = sorted(by_k)
 want = {7, 8, 9, 600, 601, 602, 603}  # (700 was taken off above)
 check(len(ks) > 2 and all(set(by_k[k]) == want and len(order[k]) == 7 for k in ks[1:]),  # the first round had no estimate: cut for time
       f"a round cut by the cap sends the whole rings before it, each item once: {[sorted(by_k[k]) for k in ks][1:3]}")
+belt_mod.lane_weight = 1
 belt_mod.items_per_message = 300
 belt_mod.max_items = 6000
 # The client's Smooth belt items (`bfar` u): a round is read in one tick, so updates come every
@@ -534,7 +769,7 @@ take()
 
 # `rate`: a server under load sends its costliest updates less often (rate.lua). Each level doubles
 # the interval of the jobs at its tier and above; the character's own `me` never slows down.
-rate = g.require("scripts.rate")
+rate = g.package.loaded["scripts.rate"]
 
 
 def spacing(msgs, t):
@@ -1052,6 +1287,23 @@ check(of_type(msgs, "upd"), "ore amount update is sent while mining")
 check(any(d["p"] == eid["iron-ore"] for d in of_type(msgs, "del")), "depleted ore is deleted")
 inv = of_type(msgs, "inv")
 check(inv and ["iron-ore", 2] in inv[-1]["l"], "both ore units were mined")
+
+# --- issue #10: mining a wagon standing on a rail takes the wagon, by its unit number ------------
+rail = spawn("straight-rail", 3.0, 3.0, force="player")
+wagon = spawn("cargo-wagon", 3.0, 3.0, force="player")
+wagon_unit = wagon.unit_number
+send({"t": "hello", "v": 1, "sid": "s1", "w": 1})  # keep-alive: the mining adds up towards the timeout
+for _ in range(10):
+    send({"t": "mine", "u": wagon_unit, "p": eid["cargo-wagon"], "x": fixed(3.0), "y": fixed(3.0)})
+    tick(15)
+tick(30)
+msgs = take()
+check(not wagon.valid and rail.valid, "#10: mining by unit number takes the wagon on the rail, the rail stays")
+check(not any(m["text"] == "Can't mine that" for m in of_type(msgs, "msg")), "#10: no 'Can't mine that' for the wagon")
+inv = of_type(msgs, "inv")
+check(inv and any(row[0] == "cargo-wagon" for row in inv[-1]["l"]), f"#10: the wagon lands in the inventory: {inv[-1]['l'] if inv else None}")
+rail.destroy()
+send({"t": "hello", "v": 1, "sid": "s1", "w": 1})
 
 # --- building, rotating ----------------------------------------------------------------------
 puppet.insert(lua.table_from({"name": "transport-belt", "count": 5}))
@@ -2918,6 +3170,59 @@ send({"t": "alt", "on": 0})
 tick(70)
 check(not of_type(take(), "ai"), "Alt-mode off stops the icons")
 
+# Issue #9: Alt-mode's icon rides on the record (no cap, no scan); a furnace (its recipe comes from
+# what is put in) and circuit-wired machines are watched, `aiu` carrying what changed; a window
+# closed in the real game sends the icon too.
+send({"t": "hello", "v": 1, "sid": "s1", "w": 1})
+asm_r = spawn("assembling-machine-1", 14.5, 14.5, force="player")
+asm_r.set_recipe("iron-gear-wheel")
+alt_furnace = spawn("stone-furnace", 17.0, 14.0, force="player")
+F["raise"]("script_raised_built", lua.table_from({"entity": asm_r}))
+F["raise"]("script_raised_built", lua.table_from({"entity": alt_furnace}))
+tick(2)
+adds = {m["e"][0]: m["e"] for m in of_type(take(), "add")}
+rec_asm, rec_furnace = adds.get(asm_r.unit_number), adds.get(alt_furnace.unit_number)
+check(rec_asm and len(rec_asm) > 5 and rec_asm[5].get("ai") == ["recipe", "iron-gear-wheel"],
+      f"#9: an assembler's record carries its Alt-mode icon (extra.ai): {rec_asm}")
+check(rec_furnace and (len(rec_furnace) == 5 or "ai" not in rec_furnace[5]), f"#9: an idle furnace's record has none: {rec_furnace}")
+check(g.storage.f3d.altw[alt_furnace.unit_number] and not g.storage.f3d.altw[asm_r.unit_number],
+      "#9: the furnace is watched, the unwired assembler isn't")
+fill(alt_furnace, "input", "iron-ore", 3)
+send({"t": "hello", "v": 1, "sid": "s1", "w": 1})
+tick(250)
+aiu = [row for m in of_type(take(), "aiu") for row in m["l"]]
+check([alt_furnace.unit_number, "recipe", "iron-plate"] in aiu, f"#9: the furnace taking ore sends its new icon in aiu: {aiu}")
+F.inventories[alt_furnace]["input"].remove(lua.table_from({"name": "iron-ore", "count": 3}))
+send({"t": "hello", "v": 1, "sid": "s1", "w": 1})
+tick(250)
+aiu = [row for m in of_type(take(), "aiu") for row in m["l"]]
+check([alt_furnace.unit_number, ""] in aiu, f"#9: and its icon going when it has nothing: {aiu}")
+send({"t": "hello", "v": 1, "sid": "s1", "w": 1})
+tick(250)
+check(not of_type(take(), "aiu"), "#9: nothing more while nothing changes")
+send({"t": "hello", "v": 1, "sid": "s1", "w": 1})
+asm_r.set_recipe("transport-belt")  # no event (a script, or the real game's window still open)
+F["raise"]("on_gui_closed", lua.table_from({"entity": asm_r, "player_index": 1}))
+tick(1)
+aiu = [row for m in of_type(take(), "aiu") for row in m["l"]]
+check([asm_r.unit_number, "recipe", "transport-belt"] in aiu, f"#9: a window closed in the real game sends the machine's icon: {aiu}")
+asm_r.set_recipe("oil-processing")
+F["raise"]("on_gui_closed", lua.table_from({"entity": asm_r, "player_index": 1}))
+tick(1)
+fa = [row for m in of_type(take(), "aiu") for row in m.get("fa", [])]
+check([asm_r.unit_number, 3] in fa, f"#9 part 2: a recipe taking and making fluid sends its arrows' mask (fa 3): {fa}")
+asm_r.set_recipe("iron-gear-wheel")
+F["raise"]("on_gui_closed", lua.table_from({"entity": asm_r, "player_index": 1}))
+tick(1)
+fa = [row for m in of_type(take(), "aiu") for row in m.get("fa", [])]
+check([asm_r.unit_number, 0] in fa, f"#9 part 2: and none again with an item recipe: {fa}")
+send({"t": "hello", "v": 1, "sid": "s1", "w": 1})
+asm_r.destroy()
+alt_furnace.destroy()
+tick(250)
+check(not g.storage.f3d.altw[alt_furnace.unit_number] if g.storage.f3d.altw else True, "#9: a watched machine gone is forgotten after a round")
+take()
+
 # Chat: the client's line goes to the game's chat; players' lines come back.
 F.printed = lua.table()
 send({"t": "chat", "text": "hello factory"})
@@ -3262,6 +3567,23 @@ gui = guis(take(), req)
 lg = gui[-1].get("lg", {}) if gui else {}
 check(lg.get("mode") == "requester" and lg.get("requests") == [["iron-gear-wheel", 10, -1], ["wood", 5, 20]],
       f"a requester chest's screen: its requests, set by set_requests: {lg}")
+# Alt-mode: a mixed requester chest shows its first four requests, each a quarter of the icon (owner).
+alt_mod = lua.eval('package.loaded["scripts.alt_mode"]')
+icon2 = alt_mod.icon(req)
+req5 = spawn("requester-chest", px + 2.5, py + 3.5, force="player")
+lua.execute("""local e = ...
+  local secs = e.get_logistic_sections()
+  local sec = secs.get_section(1) or secs.add_section()
+  local list = {}
+  for _, name in ipairs({ "iron-gear-wheel", "wood", "transport-belt", "stone-furnace", "wooden-chest" }) do
+    list[#list + 1] = { value = { type = "item", name = name, quality = "normal" }, min = 1 }
+  end
+  sec.filters = list""", req5)
+icon5 = alt_mod.icon(req5)
+as_list = lambda t: [t[1], t[2], list(t[3].values()) if t[3] else None] if t else None
+check(as_list(icon2) == ["item", "iron-gear-wheel", ["wood"]] and as_list(icon5) == ["item", "iron-gear-wheel", ["wood", "transport-belt", "stone-furnace"]],
+      f"Alt-mode: a requester chest's first four requests: {as_list(icon2)} {as_list(icon5)}")
+req5.destroy()
 check(lg.get("net", {}).get("items") == [["copper-plate", 80], ["iron-plate", 50]] and "trash" in gui[-1]["slots"],
       f"and its network's contents (most first) and its trash slots: {gui[-1:]}")
 lc = gui[-1].get("lc", {}) if gui else {}

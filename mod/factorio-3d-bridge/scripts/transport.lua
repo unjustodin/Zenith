@@ -163,8 +163,9 @@ function M.encode_groups(flat, width, first, last)
 end
 
 -- Sends parts made by encode_groups as `t` messages stamped with tick `k` (at least one, empty).
--- `extra`, optional: more fields for every part, as JSON text starting with a comma.
-function M.send_parts(t, k, bodies, extra)
+-- `extra`, optional: more fields for every part, as JSON text starting with a comma; `tails`,
+-- optional: more for single parts, by part, written after the list.
+function M.send_parts(t, k, bodies, extra, tails)
   local client = storage.f3d.client
   if not client then
     return
@@ -172,7 +173,7 @@ function M.send_parts(t, k, bodies, extra)
   local parts = math.max(1, #bodies)
   local head = '{"t":"' .. t .. '","k":' .. k .. ',"parts":' .. parts .. (client.z and ',"z":1' or "") .. (extra or "") .. ',"part":'
   for part = 1, parts do
-    send_raw(client.port, head .. part .. ',"l":[' .. (bodies[part] or "") .. "]}")
+    send_raw(client.port, head .. part .. ',"l":[' .. (bodies[part] or "") .. "]" .. (tails and tails[part] or "") .. "}")
   end
 end
 

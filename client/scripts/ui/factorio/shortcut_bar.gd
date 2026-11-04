@@ -2,7 +2,7 @@ extends PanelContainer
 ## Factorio's shortcut bar, right of the quickbar (shortcut_bar_window_frame): every shortcut of
 ## shortcuts.lua in its order (Alt-mode, undo, redo, copy, cut, paste, import string, blueprint,
 ## blueprint book, deconstruction and upgrade planner, the equipment toggles, copper, green and red
-## wire, the remotes, tall entities), with its own icons (base/graphics/icons/shortcut-toolbar) on
+## wire, the remotes), with its own icons (base/graphics/icons/shortcut-toolbar) on
 ## shortcut_bar_button and its blue, red and green kinds. Like Factorio's the buttons fill columns
 ## top to bottom (two rows when there is room).
 ##
@@ -14,7 +14,8 @@ extends PanelContainer
 ##
 ## `pressed(name)` goes to factorio_ui.gd, which does what the shortcut's key does, and which picks
 ## the number of columns and a scale so the bar fits beside the quickbar. Toggles (Alt-mode, the
-## equipment, tall entities) show pressed while on.
+## equipment) show pressed while on. Factorio's last shortcut, "Toggle visibility of tall
+## entities", isn't here: its see-through fade was taken out at the owner's word.
 
 const Kit := preload("res://scripts/ui/factorio/kit.gd")
 const GuiAssets := preload("res://scripts/ui/factorio/gui_assets.gd")
@@ -47,10 +48,9 @@ const SHORTCUTS := [
 	["artillery", "artillery-targeting-remote", "Create artillery targeting remote", "", "", "artillery"],
 	["discharge", "discharge-defense-remote", "Create discharge defense remote", "", "", "discharge-defense-equipment"],
 	["spidertron", "new-rts-tool", "Create spidertron remote", "", "", "spidertron"],
-	["tall", "tall-entities", "Toggle visibility of tall entities", "", "", ""],
 ]
 ## Toggles: drawn pressed while on.
-const TOGGLES := ["alt", "roboport", "exoskeleton", "tall"]
+const TOGGLES := ["alt", "roboport", "exoskeleton"]
 const STYLES := {"": "FPageButton", "blue": "FBluePageButton", "red": "FRedPageButton", "green": "FGreenPageButton"}
 
 var _buttons := {}

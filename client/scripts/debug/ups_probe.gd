@@ -14,12 +14,12 @@ const SETTLE := 12.0
 const MEASURE := 24.0
 const LEG := 6.0
 
-## name -> {knob: value}; knobs: near (belts in full, tiles), far (far belt lanes, tiles), entity
+## name -> {knob: value}; knobs: updates (belt items sent moving), far (belt item distance, tiles), entity
 ## (focus radius, tiles), view (chunks), fps (Engine.max_fps), scale (3D render scale).
 const VARIANTS := {
 	"base": {},
-	"near 16": {"near": 16},
-	"near 8": {"near": 8},
+	"updates 3000": {"updates": 3000},
+	"updates 1500": {"updates": 1500},
 	"far 64": {"far": 64},
 	"far 0": {"far": 0},
 	"entity 128": {"entity": 128},
@@ -28,7 +28,7 @@ const VARIANTS := {
 	"view 5": {"view": 5},
 	"fps 30": {"fps": 30},
 	"scale 0.5": {"scale": 0.5},
-	"floors": {"near": 8, "far": 0, "entity": 64, "view": 5},
+	"floors": {"updates": 1500, "far": 0, "entity": 64, "view": 5},
 	"base again": {},
 }
 
@@ -78,7 +78,7 @@ func _process(delta: float) -> void:
 	if _index < 0:
 		_warm += delta
 		if _warm >= WARMUP:
-			_base = {"near": main.belt_lanes.near, "far": main.belt_lanes.distance, "entity": main.world.focus_radius,
+			_base = {"updates": main.belt_lanes.cap, "far": main.belt_lanes.distance, "entity": main.world.focus_radius,
 				"view": main.world.view_radius, "fps": Engine.max_fps, "scale": get_viewport().scaling_3d_scale}
 			_next()
 		return
@@ -112,8 +112,9 @@ func _next() -> void:
 		return
 	var v: Dictionary = _base.duplicate()
 	v.merge(VARIANTS.get(_names[_index], {}), true)
-	main.belt_lanes.near = int(v["near"])
+	main.belt_lanes.cap = main.belt_lanes.cap_of(float(v["updates"])) if float(v["updates"]) > 0.0 else 0
 	main.belt_lanes.distance = int(v["far"])
+	main.belt_lanes.near = mini(main.belt_lanes.distance, main.belt_lanes.MOVING_MAX)
 	main.world.set_focus_radius(int(v["entity"]))
 	main.world.view_radius = int(v["view"])
 	Engine.max_fps = int(v["fps"])
@@ -129,7 +130,7 @@ func _log_some(delta: float) -> void:
 	var g = main.ups_governor
 	print("ups-gov %s" % JSON.stringify({"t": snappedf(_log_time, 0.1), "unix": Time.get_unix_time_from_system(), "ups": snappedf(g.ups, 0.01),
 		"level": g.level, "held": g.status(), "fps": Engine.get_frames_per_second(), "entity": main.world.focus_radius,
-		"near": main.belt_lanes.near, "far": main.belt_lanes.distance, "view": main.world.view_radius}))
+		"updates": main.belt_lanes.cap, "far": main.belt_lanes.distance, "view": main.world.view_radius}))
 	if _log_time >= _governed:
 		set_process(false)
 		Bridge.send({"t": "walk", "d": -1})

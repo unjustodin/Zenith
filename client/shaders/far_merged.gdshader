@@ -10,6 +10,8 @@ shader_type spatial;
 
 render_mode blend_mix, depth_draw_opaque, cull_back, diffuse_burley, specular_schlick_ggx;
 
+#include "res://shaders/ground_height.gdshaderinc"
+
 uniform vec2 part_light = vec2(0.95, 0.6);
 uniform vec3 grime_color : source_color = vec3(0.13, 0.11, 0.09);
 uniform float ground_grime = 0.3;
@@ -19,6 +21,7 @@ varying float world_y;
 
 void vertex() {
 	world_y = (MODEL_MATRIX * vec4(VERTEX, 1.0)).y;
+	VERTEX = ground_lift(VERTEX, MODEL_MATRIX);
 }
 
 void fragment() {

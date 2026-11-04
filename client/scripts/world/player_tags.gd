@@ -6,6 +6,7 @@ extends Node3D
 const MoverLayer := preload("res://scripts/world/movers.gd")
 const UiModel := preload("res://scripts/ui/factorio/ui_model.gd")
 const Kit := preload("res://scripts/ui/factorio/kit.gd")
+const GroundHeight := preload("res://scripts/world/ground_height.gd")
 
 ## Over the character's head (it is about 2 tiles tall).
 const HEIGHT := 2.6
@@ -37,7 +38,7 @@ func _process(_delta: float) -> void:
 		if label.text != text:
 			label.text = text
 		label.modulate = (p["color"] as Color).lightened(0.2)
-		label.position = (at as Vector3) + Vector3(0, HEIGHT, 0)
+		label.position = GroundHeight.lift((at as Vector3) + Vector3(0, HEIGHT, 0))
 	for unit in _labels.keys():
 		if not seen.has(unit):
 			(_labels[unit] as Node).queue_free()

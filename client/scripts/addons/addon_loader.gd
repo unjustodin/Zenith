@@ -10,7 +10,10 @@ extends RefCounted
 ##   user://addons                     Zenith's user data (on Windows %APPDATA%\Godot\app_userdata\Zenith\addons)
 ##   <Zenith's folder>/addons          beside Zenith.exe in a download (in a checkout: the repo's root)
 ##
-## Whether each is on is kept in the settings file's [addons] section (id -> bool, on when absent).
+## Whether each is on is kept in the settings file's [addons] section (id -> bool). Until the player
+## sets it, an add-on is on, unless the download says otherwise: tools/release/package.py writes
+## <Zenith's folder>/addons/bundled.json, {id: on?} for the add-ons it bundles (owner: the Cinematic
+## camera on, Terrain Elevation off).
 
 const Paths := preload("res://scripts/menu/paths.gd")
 const Settings := preload("res://scripts/menu/settings.gd")
@@ -19,8 +22,9 @@ const Settings := preload("res://scripts/menu/settings.gd")
 ## addon.json as "api"; one that needs a newer API than this is refused with a message.
 const API_VERSION := 1
 ## The exact API level, with what was added within version 1 (1.1: api.settings, the Add-ons
-## menu's pages, api.view.keep_drawing). An addon.json may ask for 1.1; 1 means any 1.x.
-const API_LEVEL := 1.1
+## menu's pages, api.view.keep_drawing; 1.2: api.terrain). An addon.json may ask for 1.1 or 1.2;
+## 1 means any 1.x.
+const API_LEVEL := 1.2
 const MANIFEST := "addon.json"
 ## Ids are folder-like names: lower case letters, digits, - and _.
 const ID_CHARS := "abcdefghijklmnopqrstuvwxyz0123456789-_"
@@ -260,12 +264,26 @@ static func _valid_id(id: String) -> bool:
 	return true
 
 
-## On unless switched off in the Mods window. Add-ons given with --addons are always on.
+## On unless switched off in the Add-ons menu, or off by the download's default (bundled.json) until
+## switched on. Add-ons given with --addons are always on.
 static func enabled(m: Dictionary) -> bool:
 	if str(m.get("source", "")) == "command line":
 		return true
 	var id := str(m["id"])
-	return not Settings.has_value("addons", id) or bool(Settings.get_value("addons", id))
+	if Settings.has_value("addons", id):
+		return bool(Settings.get_value("addons", id))
+	return bool(bundled_defaults().get(id, true))
+
+
+## The download's defaults for its bundled add-ons: {id: on?} from <Zenith's folder>/addons/bundled.json
+## (none in a checkout, or when it can't be read).
+static func bundled_defaults(path := "") -> Dictionary:
+	if path == "":
+		path = Paths.repo_dir().path_join("addons/bundled.json")
+	if not FileAccess.file_exists(path):
+		return {}
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+	return parsed if parsed is Dictionary else {}
 
 
 static func set_enabled(id: String, on: bool) -> void:

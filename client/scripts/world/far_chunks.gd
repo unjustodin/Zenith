@@ -21,6 +21,8 @@ const ModelLods := preload("res://scripts/world/model_lods.gd")
 const MaterialRows := preload("res://scripts/world/material_rows.gd")
 const ModelTextures := preload("res://scripts/world/model_textures.gd")
 const Visuals := preload("res://scripts/world/visuals.gd")
+const BeltLods := preload("res://scripts/world/belt_lods.gd")
+const FrameBudget := preload("res://scripts/world/frame_budget.gd")
 const MergedShader := preload("res://shaders/far_merged.gdshader")
 const FactorioAlphaShader := preload("res://shaders/factorio_material_alpha.gdshader")
 const FactorioLeafShader := preload("res://shaders/factorio_material_leaf.gdshader")
@@ -600,6 +602,8 @@ func _process(delta: float) -> void:
 	if world == null:
 		return
 	var t0 := Time.get_ticks_usec()
+	# Belts small on screen drawn with their stand-ins: the same kind of choice per chunk.
+	BeltLods.update(world, get_viewport().get_camera_3d() if is_inside_tree() else null, delta)
 	_decide(delta)
 	_collect()
 	_poll_bakes()
@@ -691,9 +695,13 @@ func _collect() -> void:
 			return (Vector2(a[0].coord * CHUNK) - focus).length_squared() < (Vector2(b[0].coord * CHUNK) - focus).length_squared()
 		fresh.sort_custom(nearer)
 		_collecting.append_array(fresh)
+	if _collecting.is_empty():
+		FrameBudget.waiting(&"far_collect", 0)
+		return
 	var started := Time.get_ticks_usec()
 	var looked := 0
-	while not _collecting.is_empty():
+	var allow := FrameBudget.grant(&"far_collect")
+	while allow > 0 and not _collecting.is_empty():
 		var entry: Array = _collecting[0]
 		if not _current(entry, GATHERING):
 			_collecting.pop_front()
@@ -701,7 +709,8 @@ func _collect() -> void:
 		var cv = entry[0]
 		var s: State = cv.far
 		while s.next < s.recs.size():
-			if looked >= 16 and (looked & 15) == 0 and Time.get_ticks_usec() - started > COLLECT_USEC:
+			if looked >= 16 and (looked & 15) == 0 and Time.get_ticks_usec() - started > allow:
+				FrameBudget.spent(&"far_collect", Time.get_ticks_usec() - started, _collecting.size())
 				return
 			_gather(cv, s, s.recs[s.next])
 			s.next += 1
@@ -712,6 +721,7 @@ func _collect() -> void:
 		s.checked = false
 		_waiting.append(entry)
 		_progress += 1
+	FrameBudget.spent(&"far_collect", Time.get_ticks_usec() - started, _collecting.size())
 
 
 ## Whether a queued [ChunkView, serial] is still the chunk's latest, in `phase`.
@@ -835,14 +845,19 @@ func _start_merges() -> void:
 
 ## Puts finished merges in, within INSTALL_USEC.
 func _install() -> void:
+	if _merging.is_empty():
+		FrameBudget.waiting(&"far_install", 0)
+		return
 	var started := Time.get_ticks_usec()
 	var i := 0
+	var allow := FrameBudget.grant(&"far_install")
 	while i < _merging.size():
 		var entry: Array = _merging[i]
 		if not WorkerThreadPool.is_task_completed(entry[0]):
 			i += 1
 			continue
-		if Time.get_ticks_usec() - started > INSTALL_USEC:
+		if allow <= 0 or Time.get_ticks_usec() - started > allow:
+			FrameBudget.spent(&"far_install", Time.get_ticks_usec() - started, _merging.size())
 			return
 		WorkerThreadPool.wait_for_task_completion(entry[0])
 		_merging.remove_at(i)
@@ -866,6 +881,7 @@ func _install() -> void:
 		s.node.visible = true
 		if s.full:
 			_hide_full(cv)  # kept hidden: coming near again before anything changes shows them
+	FrameBudget.spent(&"far_install", Time.get_ticks_usec() - started, _merging.size())
 
 
 ## [merged chunks drawn, their triangles, chunks far] now (for the probe and tests).

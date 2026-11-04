@@ -8,6 +8,7 @@ const MoverLayer := preload("res://scripts/world/movers.gd")
 const ProtoDB := preload("res://scripts/world/protos.gd")
 const Visuals := preload("res://scripts/world/visuals.gd")
 const Avatar := preload("res://scripts/player/avatar.gd")
+const GroundHeight := preload("res://scripts/world/ground_height.gd")
 
 const BAR_SIZE := Vector2(0.9, 0.12)
 const BAR_LIFT := 0.5  # above the top of the entity it belongs to
@@ -153,12 +154,6 @@ func _bar_position(unit: int) -> Variant:
 	return Vector3(rec.pos.x, height + BAR_LIFT, rec.pos.y)
 
 
-static func _bar_material(priority: int) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	m.vertex_color_use_as_albedo = true
-	m.no_depth_test = true
-	m.cull_mode = BaseMaterial3D.CULL_DISABLED
-	m.render_priority = priority
-	return m
+static func _bar_material(priority: int) -> ShaderMaterial:
+	# Vertex colours over everything, lifted with the entity onto the hills (ground_height.gd).
+	return GroundHeight.overlay_material(priority)

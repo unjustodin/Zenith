@@ -4,12 +4,14 @@ shader_type spatial;
 render_mode world_vertex_coords;
 
 #include "res://shaders/belt_path.gdshaderinc"
+#include "res://shaders/ground_height.gdshaderinc"
 #include "res://shaders/icon_lod.gdshaderinc"
 
 uniform sampler2D icon : source_color, filter_linear_mipmap_anisotropic;
 
 void vertex() {
 	VERTEX = belt_vertex(VERTEX, INSTANCE_CUSTOM);
+	VERTEX.y += ground_h(VERTEX.xz);  // world coordinates here
 }
 
 void fragment() {

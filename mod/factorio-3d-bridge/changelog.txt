@@ -1,4 +1,20 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.1.2
+Date: 2026-11-04
+  Features:
+    - Stacked belt items (stack inserters' stacks) are sent with their size, for the 3D client to draw them as piles.
+    - Alt-mode icons travel with each building, on every loaded machine (no 400-machine limit); requester and buffer chests show their first four requests (issue #9).
+    - Alt-mode's inserter, pump and machine arrows: the fluid connections a recipe uses and the recycler's output (issue #9).
+    - The client chooses how many belt items move (Belt updates, or Unlimited) and how far; the bridge's own 6,000 cap and the entity distance no longer limit it.
+  Optimizations:
+    - Belt lanes that didn't change aren't read or sent again: the bridge's belt cost at a busy base fell from 12-15 ms to about 3-5 ms a tick.
+    - Alt-mode costs the bridge the same as when it is off.
+  Bugfixes:
+    - Right-click mines trains, wagons and cars with their fuel and cargo, not the rail under them (issue #10).
+    - Full belts that flow were sometimes held still for seconds and then jumped.
+    - Belt lines that moved on by whole slots are read along their length, splitters and undergrounds included, so belts no longer show an item short or double.
+    - The edge of the moving-items area no longer goes back and forth while standing still.
+---------------------------------------------------------------------------------------------------
 Version: 0.1.1
 Date: 2026-11-02
   Bugfixes:

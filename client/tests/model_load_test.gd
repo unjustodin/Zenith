@@ -144,8 +144,6 @@ func _same_mesh(what: String, old: Mesh, new: Mesh, combine: bool) -> void:
 		for p in ["vertex_data", "edge_data", "view_data", "part_data", "activity_glow", "albedo", "emission_energy"]:
 			if str(ma.get_shader_parameter(p)) != str(mb.get_shader_parameter(p)):
 				_fail("%s surface %d: %s %s, was %s" % [what, i, p, mb.get_shader_parameter(p), ma.get_shader_parameter(p)])
-		if str(ma.get_shader_parameter("tall")) != str(merged.get_shader_parameter("tall")):
-			_fail("%s surface %d: tall %s, was %s" % [what, i, merged.get_shader_parameter("tall"), ma.get_shader_parameter("tall")])
 		if int(found[1]) >= 0:
 			_same_row(what + " surface %d" % i, ma, merged, int(found[1]))
 		var j: int = found[0]

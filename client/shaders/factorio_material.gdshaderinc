@@ -38,26 +38,12 @@
 //                   negative, for underground exits), or round the
 //                   arc on curves (belt_shape 1: left curve, 2: right curve).
 
-//
-// Tall entities (Factorio's "Toggle visibility of tall entities" shortcut, tall_fade.gd): models
-// taller than 2 tiles get `tall` (model_library.gd). While f3d_fade is on, an instance whose middle
-// lies near the line from the camera to the character or to the cursor, on the camera's side, is
-// dithered away (a 4x4 ordered dither), so what is behind it shows. One value per instance, from
-// its position, so whole buildings and trees fade, not slices of them.
 
 #include "res://shaders/noise.gdshaderinc"
+#include "res://shaders/ground_height.gdshaderinc"
 #ifdef MOVER
 #include "res://shaders/mover_records.gdshaderinc"
 #endif
-
-uniform bool tall = false;
-global uniform float f3d_fade;
-global uniform vec3 f3d_fade_eye;
-global uniform vec3 f3d_fade_target;
-global uniform vec3 f3d_fade_cursor;
-const float FADE_NEAR = 1.6;  // tiles from the line: fully faded inside, none past FADE_FAR
-const float FADE_FAR = 2.8;
-const float FADE_MOST = 0.8;  // the most that is dithered away: the outline stays faintly
 
 uniform vec4 albedo : source_color = vec4(1.0);
 uniform float roughness : hint_range(0.0, 1.0) = 0.6;
@@ -72,6 +58,9 @@ uniform float view_data = 1.0;
 // tier and creature tints, which recolour the material).
 uniform float part_data = 0.0;
 uniform bool part_colors = true;
+// Cliffs: lifted by the low ground (ground_height.gdshaderinc), so the rock sits at the foot of
+// the terrace its cliff makes instead of riding up it.
+uniform bool ground_low = false;
 // Multiplies the whole model's colour: Factorio's tinted copies of another entity's pictures
 // (the infinity pipe is the pipe tinted blue; model_library.gd WHOLE_TINTS).
 uniform vec3 model_tint : source_color = vec3(1.0);
@@ -236,28 +225,6 @@ varying vec2 depth_uv;
 varying float depth_here;
 varying float depth_slack;
 varying vec4 part_col;
-varying flat float fade_amt;
-
-// Distance from p to the segment a-b, and how far along it the nearest point is (0 at a, 1 at b).
-float segment_distance(vec3 p, vec3 a, vec3 b, out float t) {
-	vec3 ab = b - a;
-	t = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-4), 0.0, 1.0);
-	return length(p - (a + ab * t));
-}
-
-// How much an instance standing at `o` is in the way of the camera's view of `target`.
-float in_the_way(vec3 o, vec3 target) {
-	float best = 1e9;
-	for (int k = 0; k < 3; k++) {
-		float t;
-		float d = segment_distance(o + vec3(0.0, 0.8 + 1.2 * float(k), 0.0), f3d_fade_eye, target, t);
-		if (t > 0.02 && t < 0.96) {
-			best = min(best, d);
-		}
-	}
-	return 1.0 - smoothstep(FADE_NEAR, FADE_FAR, best);
-}
-
 float hash13(vec3 p) {
 	p = mod(p, 4096.0);
 	p = fract(p * 0.1031);
@@ -602,11 +569,6 @@ void vertex() {
 		inst_seed = fract(ms.kind.x * 0.1591549 + 0.37);  // its own, not where it happens to be
 	}
 #endif
-	fade_amt = 0.0;
-	if (tall && f3d_fade > 0.5) {
-		vec3 o = vec3(origin.x, MODEL_MATRIX[3].y, origin.y);
-		fade_amt = max(in_the_way(o, f3d_fade_target), in_the_way(o, f3d_fade_cursor)) * FADE_MOST;
-	}
 	activity = glows && rig_mode != 4 ? clamp(f3d_glow >= 0.0 ? f3d_glow
 		: (timed ? anim_glow(INSTANCE_CUSTOM, float(INSTANCE_ID)) : icustom.a), 0.0, 1.0) : 1.0;
 #ifdef ROBOT
@@ -761,6 +723,9 @@ void vertex() {
 		world_y = (MODEL_MATRIX * vec4(VERTEX, 1.0)).y;
 	}
 #endif
+	// The ground's height under every vertex (ground_height.gdshaderinc), last, so moving parts, rigs and
+	// movers all ride on it. world_y stays the height over the ground (weathering reads it).
+	VERTEX = ground_lift_of(VERTEX, MODEL_MATRIX, ground_low);
 }
 
 void fragment() {
@@ -772,15 +737,6 @@ void fragment() {
 		NORMAL = -NORMAL;
 	}
 #endif
-	if (fade_amt > 0.0) {
-		// 4x4 Bayer thresholds: an even, steady dither.
-		ivec2 c = ivec2(FRAGCOORD.xy) % 4;
-		int i = c.x + c.y * 4;
-		float bayer[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
-		if ((bayer[i] + 0.5) / 16.0 < fade_amt) {
-			discard;
-		}
-	}
 	// A merged surface has every vertex array (material_rows): its data flags are all on.
 	bool merged = mat_row >= 0;
 	float vertex_on = merged ? 1.0 : vertex_data;

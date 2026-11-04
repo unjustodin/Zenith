@@ -185,14 +185,15 @@ func _process(_delta: float) -> void:
 	var player: Vector2 = me[0]
 	if _redraw or at.distance_squared_to(_drawn_at) * scale * scale > 0.04 or absf(float(me[1]) - _drawn_heading) > 0.02 \
 			or player.distance_squared_to(_drawn_player) * scale * scale > 0.04:
-		var changed := _redraw
 		_redraw = false
 		_drawn_at = at
 		_drawn_player = player
 		_drawn_heading = float(me[1])
 		_area.queue_redraw()
-		_layers.character_at = player
-		_layers.follow(_drawn_at, scale, changed)
+	# The layers draw again only what changed: their own data (each layer listens for its own), or
+	# the view moved or zoomed.
+	_layers.character_at = _drawn_player
+	_layers.follow(_drawn_at, scale, false)
 
 
 ## Asks for the minimap's own area, or now and then for the map view's (preload).

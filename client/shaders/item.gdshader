@@ -5,6 +5,7 @@ shader_type spatial;
 render_mode world_vertex_coords;
 
 #include "res://shaders/belt_path.gdshaderinc"
+#include "res://shaders/ground_height.gdshaderinc"
 
 uniform vec4 color : source_color = vec4(1.0);
 uniform float roughness = 0.8;
@@ -13,6 +14,7 @@ uniform float exposure = 1.0;
 
 void vertex() {
 	VERTEX = belt_vertex(VERTEX, INSTANCE_CUSTOM);
+	VERTEX.y += ground_h(VERTEX.xz);  // world coordinates here
 }
 
 void fragment() {

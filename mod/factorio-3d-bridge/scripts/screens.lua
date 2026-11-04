@@ -20,6 +20,7 @@ local space = require("scripts.space")
 local machine_info = require("scripts.machine_info")
 local map = require("scripts.map")
 local modules = require("scripts.modules")
+local alt_mode = require("scripts.alt_mode")
 
 local M = {}
 
@@ -158,6 +159,10 @@ end
 local function close(s, why)
   local sc = s.screen
   s.screen = nil
+  -- A recipe or filter set just before closing: Alt-mode's icon follows at once.
+  if sc.entity.valid then
+    alt_mode.check(sc.entity, sc.ai)
+  end
   if why then
     puppet.message(why)
   end
@@ -406,11 +411,16 @@ function M.open(cmd)
   if kind == "other" and #inventories(e, kind) == 0 and not circuits.signals(e) and not entity_ui.openable(e) then
     return puppet.message("Nothing to open there")
   end
-  s.screen = { entity = e, unit = e.unit_number, sent = 0, due = game.tick, remote = remote or nil }
+  s.screen = { entity = e, unit = e.unit_number, sent = 0, due = game.tick, remote = remote or nil,
+    ai = alt_mode.TYPES[e.type] and select(3, alt_mode.state(e)) or nil }
 end
 
 function M.close()
+  local sc = storage.f3d.screen
   storage.f3d.screen = nil
+  if sc and sc.entity.valid then
+    alt_mode.check(sc.entity, sc.ai)
+  end
 end
 
 -- {u, cb}: a combinator's new settings, in the shape `gui.cb` has.
@@ -695,6 +705,8 @@ function M.tick()
   end
   sc.due = game.tick + INTERVAL
   send_state(c, sc.entity, sc)
+  -- Its recipe or filters set from the screen (or by circuits while it is open): Alt-mode's icon.
+  sc.ai = alt_mode.check(sc.entity, sc.ai)
 end
 
 function M.reset()

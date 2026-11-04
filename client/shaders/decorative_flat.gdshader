@@ -9,10 +9,13 @@ shader_type spatial;
 // but cast none (decoratives.gd turns casting off).
 render_mode blend_mix, depth_draw_never, cull_disabled;
 
+#include "res://shaders/ground_height.gdshaderinc"
+
 uniform sampler2D atlas : source_color, filter_linear_mipmap_anisotropic, repeat_disable;
 
 void vertex() {
 	UV = vec2(INSTANCE_CUSTOM.x + UV.x * INSTANCE_CUSTOM.y, UV.y * INSTANCE_CUSTOM.z);
+	VERTEX = ground_lift(VERTEX, MODEL_MATRIX);
 }
 
 void fragment() {

@@ -15,6 +15,10 @@ const ItemModels := preload("res://scripts/world/item_models.gd")
 const CardShader := preload("res://shaders/item_card.gdshader")
 
 const CARD_SIZE := 0.32
+## A stack on a belt is drawn as a pile (belt_items.gd): each copy this much above the one under it.
+## Icon cards lie flat, so the step is what shows the pile from the angled camera, as Factorio draws
+## a stack's icons a little higher each; models and blocks pile by their own height.
+const CARD_PILE := 0.07
 const BLOCK_SIZE := Vector3(0.22, 0.08, 0.22)
 ## Models turn by up to this much either way (radians), by item, so a full belt of plates
 ## doesn't look tiled. Cards stay square to the map, as Factorio draws its icons.
@@ -27,6 +31,7 @@ var protos: ProtoDB
 var _kinds := {}  # item id -> MultiMeshInstance3D
 var _lift := {}  # item id -> Vector3, raises blocks so they sit on what carries them
 var _turns := {}  # item id -> true when it is drawn as a model (turned by its yaw)
+var _pile := {}  # item id -> the step between a pile's copies (pile_step())
 var _buffers := {}  # item id -> PackedFloat32Array, the MultiMesh's instances
 var _materials := {}  # ShaderMaterial -> true, the ones set_glide() updates
 var _paths: Texture2D = null  # set_paths(): kept across reset(), given to every new material
@@ -64,6 +69,7 @@ func reset() -> void:
 	_kinds.clear()
 	_lift.clear()
 	_turns.clear()
+	_pile.clear()
 	_buffers.clear()
 	_materials.clear()
 	_loading.clear()
@@ -148,6 +154,11 @@ func put(item_id: int, buf: PackedFloat32Array, n: int, cap: int) -> void:
 ## What raises this kind above the position it is given (blocks stand on it).
 func lift(item_id: int) -> Vector3:
 	return _lift.get(item_id, Vector3.ZERO)
+
+
+## How far apart a pile's copies are for this kind: a model's or block's height, a card's CARD_PILE.
+func pile_step(item_id: int) -> float:
+	return _pile.get(item_id, CARD_PILE)
 
 
 ## Whether this kind is drawn as a model, which turns by its yaw (cards don't).
@@ -289,6 +300,7 @@ func _dress(item_id: int, item: String, mmi: MultiMeshInstance3D) -> void:
 		mm.mesh = model
 		material = ItemModels.material()
 		_turns[item_id] = true
+		_pile[item_id] = clampf(model.get_aabb().size.y, 0.03, 0.2)
 	elif texture != null:
 		mm.mesh = _card()
 		material = ShaderMaterial.new()
@@ -298,6 +310,7 @@ func _dress(item_id: int, item: String, mmi: MultiMeshInstance3D) -> void:
 		mm.mesh = _block()
 		material = ItemModels.block_material(ItemIcons.color_for(item))
 		_lift[item_id] = Vector3(0.0, BLOCK_SIZE.y * 0.5, 0.0)
+		_pile[item_id] = BLOCK_SIZE.y
 	mmi.material_override = material
 	if _paths != null:
 		material.set_shader_parameter("belt_paths", _paths)

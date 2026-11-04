@@ -16,6 +16,7 @@ extends Node3D
 ## decoratives' textures, within FINISH_USEC a frame; the chunk's old clutter stays until then.
 
 const ItemIcons := preload("res://scripts/world/item_icons.gd")
+const FrameBudget := preload("res://scripts/world/frame_budget.gd")
 const SHADER := preload("res://shaders/decorative.gdshader")
 const SHADER_FLAT := preload("res://shaders/decorative_flat.gdshader")
 const INDEX := "res://data/decoratives.json"
@@ -45,7 +46,7 @@ const LAYER_LIFT := {"decals": 0.010, "ground-layer-1": 0.016, "ground-layer-2":
 const TILE_STEP := 0.0012
 const TILE_STEPS := 4
 ## Main-thread time a frame spends making finished chunks' MultiMeshes (at least one chunk).
-const FINISH_USEC := 3000
+const FINISH_USEC := 3000  # its slice in frame_budget.gd
 ## Floats per instance in a MultiMesh buffer: a 3x4 transform, then the custom data.
 const STRIDE := 16
 
@@ -165,7 +166,14 @@ func handle(msg: Dictionary) -> void:
 
 
 func _process(delta: float) -> void:
-	_finish_jobs(FINISH_USEC)
+	if _jobs.is_empty():
+		FrameBudget.waiting(&"decoratives", 0)
+	else:
+		var t0 := Time.get_ticks_usec()
+		var allow := FrameBudget.grant(&"decoratives")
+		if allow > 0:
+			_finish_jobs(allow)
+		FrameBudget.spent(&"decoratives", Time.get_ticks_usec() - t0, _jobs.size())
 	_cull()
 	_sweep += delta
 	if _sweep < 2.0 or world == null:
@@ -177,7 +185,7 @@ func _process(delta: float) -> void:
 
 
 ## Shows the chunks near the focus only: one distance per chunk, again whenever the focus has moved
-## a little, the distance changed or a chunk's MultiMeshes were made (_culled_at reset).
+## a little or the distance changed; a chunk whose MultiMeshes were just made is culled alone (_replace).
 func _cull() -> void:
 	var focus: Node3D = rig.get("target") if rig != null and is_instance_valid(rig) else null
 	if focus == null or not is_instance_valid(focus):
@@ -188,17 +196,21 @@ func _cull() -> void:
 	_culled_at = at
 	_culled_distance = distance
 	for c: Vector2i in _chunks:
-		var node: Node3D = _chunks[c]
-		var area := Rect2(Vector2(c) * CHUNK, Vector2(CHUNK, CHUNK))
-		var near := area.get_center() + (at - area.get_center()).clamp(-area.size * 0.5, area.size * 0.5)
-		var d := near.distance_to(at)
-		var share := 0.0 if d > distance else (1.0 if d <= FULL_DISTANCE else (0.5 if d <= HALF_DISTANCE else 0.25))
-		node.visible = share > 0.0
-		if share > 0.0 and _shares.get(c, -1.0) != share:
-			_shares[c] = share
-			for inst in node.get_children():
-				var mm := (inst as MultiMeshInstance3D).multimesh
-				mm.visible_instance_count = ceili(mm.instance_count * share)
+		_cull_one(c, _chunks[c], at)
+
+
+## One chunk's clutter shown, and how much of it, from its distance to `at`.
+func _cull_one(c: Vector2i, node: Node3D, at: Vector2) -> void:
+	var area := Rect2(Vector2(c) * CHUNK, Vector2(CHUNK, CHUNK))
+	var near := area.get_center() + (at - area.get_center()).clamp(-area.size * 0.5, area.size * 0.5)
+	var d := near.distance_to(at)
+	var share := 0.0 if d > distance else (1.0 if d <= FULL_DISTANCE else (0.5 if d <= HALF_DISTANCE else 0.25))
+	node.visible = share > 0.0
+	if share > 0.0 and _shares.get(c, -1.0) != share:
+		_shares[c] = share
+		for inst in node.get_children():
+			var mm := (inst as MultiMeshInstance3D).multimesh
+			mm.visible_instance_count = ceili(mm.instance_count * share)
 
 
 func _drop(c: Vector2i) -> void:
@@ -276,10 +288,15 @@ func _replace(c: Vector2i, node: Node3D) -> void:
 		old.queue_free()
 		_chunks.erase(c)
 	if node != null:
-		_shares.erase(c)  # set again by _cull for the new MultiMeshes
-		_culled_at = Vector2.INF
+		_shares.erase(c)  # set again for the new MultiMeshes
 		add_child(node)
 		_chunks[c] = node
+		# Only this chunk culled now, from where the last pass was: every chunk's clutter arriving
+		# made the next frame cull all of them, nearly every frame while walking.
+		if _culled_at.is_finite():
+			_cull_one(c, node, _culled_at)
+		else:
+			_culled_at = Vector2.INF
 
 
 ## The chunk's node with a MultiMesh per decorative from a finished job, or null if it has none.

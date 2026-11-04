@@ -46,6 +46,12 @@ settings (`api.settings`, API 1.1), the options it builds itself (`api.ui.set_op
 keys. The main menu's **Mods** window lists them too, under *Zenith add-ons*. An add-on given with
 `--addons` is always on, and takes the place of an installed one with the same id.
 
+The downloads come with two of Zenith's own add-ons in their `addons/` folder: the
+[Cinematic camera](https://github.com/unjustodin/Zenith-Cinematic-Camera/releases), switched on, and
+[Terrain Elevation](https://github.com/unjustodin/Terrain-Elevation/releases), switched off until you
+turn it on in the Add-ons menu. `addons/bundled.json` holds those first states (`{"id": true}`);
+once you switch an add-on yourself, your choice is kept instead.
+
 An add-on's keys are on its page of the Add-ons menu and in **Settings → Controls**, under the
 add-on's name, and are rebound there like Zenith's own.
 
@@ -82,8 +88,8 @@ my-addon/
 | `api` | The add-on API it was written for: `1` (any 1.x) or `1.1` (needs the additions below). Zenith refuses an add-on that needs a newer API than it has, and says so in the Add-ons menu: update Zenith |
 | `entry` | The entry script, a `.gd` file in the folder |
 
-This page describes add-on API **1.1**: version 1 with additions that keep every 1.0 add-on
-working. The additions are marked *(1.1)*. An add-on that wants to run on a Zenith with 1.0 too
+This page describes add-on API **1.2**: version 1 with additions that keep every 1.0 add-on
+working. The additions are marked *(1.1)* and *(1.2)*. An add-on that wants to run on a Zenith with 1.0 too
 asks for `"api": 1` and checks before using them:
 
 ```gdscript
@@ -282,6 +288,24 @@ var distance = api.settings.add("distance", "number", 60.0, "Distance", {"min": 
 api.settings.changed.connect(func(id, v): if id == "distance": distance = v)
 ```
 
+### Hills: `api.terrain` *(1.2)*
+
+Heights under the flat Factorio world, drawn only. Factorio stays flat; Zenith lifts everything it
+draws by the height under it (the ground, every model, belts and their items, ghosts, wires,
+icons, effects), and the mouse's ground point and the camera follow. The
+[Terrain Elevation](https://github.com/unjustodin/Terrain-Elevation) add-on is the example.
+
+| | |
+|---|---|
+| `set_heights(image, origin, tiles_per_texel)` | The heights: an `Image` (`FORMAT_RF`, heights in tiles), its first texel's corner at world `origin` (`Vector2`: x, z), each texel that many tiles square. Bilinear between texel centres, 0 outside: fade the edges yourself. One field for the whole client; the last add-on to set it wins |
+| `clear()` | Flat again (only your own field). Done for you when the add-on is switched off or the game ends |
+| `is_on()`, `area()` | A field is drawn; the square it covers (`Rect2`, tiles) |
+| `height_at(x, z)` | The height drawn under a point |
+| `chunk_kinds(chunk)` | A drawn chunk's 32 x 32 tiles as kinds (0 land, 1 water, 2 empty space), row by row from its north-west corner; empty when not loaded. A loop on the main thread: a few chunks a frame |
+| `cliffs_in_chunk(chunk)` | Its cliffs: `[{position, orientation}]`, Factorio's orientation (`"west-to-east"`: from the middle of one edge of the 4 x 4 cell to another, the high ground on its left) |
+| `buildings_in_chunk(chunk)` | Its buildings, for levelling the ground under them: `[[centre, half size], ...]` (Vector2 tiles; a building turned east or west has its sides swapped). Not trees, rocks, ore, cliffs, units or ghosts |
+| `take_changed_chunks()` | The chunks whose buildings came, went or changed since the last call (a chunk loaded late, a building placed or mined); the first call starts watching |
+
 ### Lighter updates: `api.updates`
 
 While something long runs (a timelapse left for hours), an add-on can ask the bridge to send less,
@@ -291,7 +315,7 @@ ask.
 
 | | |
 |---|---|
-| `request(knobs)` | `rate` (0-3: moving things, belt items, machine states sent less often), `entity` (tiles with moving things), `near` (tiles with every item on belts, at least 8), `far` (tiles with far belt icons), `view` (chunks drawn), `map` (how many times longer the minimap waits). Leave out what you don't need |
+| `request(knobs)` | `rate` (0-3: moving things, belt items, machine states sent less often), `entity` (tiles with moving things), `near` (tiles within which items on belts may move), `far` (tiles with items on belts at all), `updates` (the most belt items sent moving an update; API 1.1 clients get it too), `view` (chunks drawn), `map` (how many times longer the minimap waits). Leave out what you don't need |
 | `clear()`, `current()` | |
 | `governor_status()` | What *Hold the game at 60 UPS* holds back now |
 

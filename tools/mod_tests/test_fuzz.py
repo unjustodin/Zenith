@@ -63,6 +63,9 @@ g.F_from_json = from_json
 lua.execute(FAKE.read_text())
 g.package.path = str(MOD / "?.lua") + ";" + g.package.path
 lua.execute((MOD / "control.lua").read_text())
+# As in Factorio, `require` works only while control.lua is being loaded (a module requiring another
+# from inside a function stops the game).
+lua.execute('require = function(name) error("Require can not be used outside of control.lua parsing: " .. tostring(name)) end')
 F = g.F
 
 # Command names and the fields the mod reads, taken from its source so new commands are fuzzed too.

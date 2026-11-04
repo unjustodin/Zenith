@@ -64,6 +64,15 @@ var _io_mutex := Mutex.new()
 var _io_run := false
 var _inbox: Array[PackedByteArray] = []
 var _outbox: Array[PackedByteArray] = []
+## The datagrams' JSON is read on a thread of its own too (walking a big base, decoding was about
+## half of the 2-7 ms a frame spent on messages): the I/O thread hands it what it read (_inbox),
+## it hands the main thread the messages read (_parsed: [datagram bytes, messages, their lengths,
+## how many had numbers that aren't finite]), and the main thread only handles them. A thread of
+## its own, not the I/O thread's: reading a burst's JSON there would leave the socket unread for
+## tens of milliseconds. Its own JSON and RegEx: neither is shared between threads.
+var _parse_thread: Thread
+var _parse_sem := Semaphore.new()
+var _parsed: Array = []
 var _session := ""
 var _expected_r := 1
 var _hello_timer := 0.0
@@ -120,6 +129,8 @@ func connect_to(host: String, port: int, listen: int) -> void:
 	_io_run = true
 	_io_thread = Thread.new()
 	_io_thread.start(_io_loop)
+	_parse_thread = Thread.new()
+	_parse_thread.start(_parse_loop)
 	# The first hello waits for the first frame. Sent now, the mod's ~200 KB handshake would
 	# arrive while the main scene is still loading, and Windows keeps only ~64 KB of unread
 	# datagrams per socket.
@@ -138,6 +149,7 @@ func disconnect_from() -> void:
 	server_tick = 0
 	stats = {"packets": 0, "bytes": 0, "gaps": 0, "handle_usec": 0, "resyncs": 0, "full_resyncs": 0, "bad_json": 0}
 	_waiting.clear()
+	_waiting_len.clear()
 	_waiting_at = 0
 	_expected_r = 1
 	_pending_resync = 0
@@ -168,7 +180,43 @@ func _io_loop() -> void:
 			_io_mutex.lock()
 			_inbox.append_array(got)
 			_io_mutex.unlock()
+			_parse_sem.post()
 		OS.delay_usec(1000)
+
+
+## The parsing thread: waits for datagrams from the I/O thread and reads their messages.
+func _parse_loop() -> void:
+	var json := JSON.new()
+	var not_finite := RegEx.create_from_string(NOT_FINITE)
+	while true:
+		_parse_sem.wait()
+		_io_mutex.lock()
+		var run := _io_run
+		var raw := _inbox
+		_inbox = []
+		_io_mutex.unlock()
+		if not run:
+			return
+		if raw.is_empty():
+			continue
+		var out: Array = []
+		for packet in raw:
+			var text := packet.get_string_from_utf8()
+			var lines := text.split("\n", false) if text.contains("\n") else PackedStringArray([text])
+			var msgs: Array = []
+			var lengths := PackedInt32Array()
+			var bad := 0
+			for line in lines:
+				var got: Array = _parse_with(json, not_finite, line)
+				if got[0] is Dictionary:
+					msgs.append(got[0])
+					lengths.append(line.length())
+				if got[1]:
+					bad += 1
+			out.append([packet.size(), msgs, lengths, bad])
+		_io_mutex.lock()
+		_parsed.append_array(out)
+		_io_mutex.unlock()
 
 
 func _stop_io() -> void:
@@ -179,7 +227,12 @@ func _stop_io() -> void:
 	_io_mutex.unlock()
 	_io_thread.wait_to_finish()
 	_io_thread = null
+	if _parse_thread != null:
+		_parse_sem.post()
+		_parse_thread.wait_to_finish()
+		_parse_thread = null
 	_inbox.clear()
+	_parsed.clear()
 
 
 func _process(delta: float) -> void:
@@ -189,17 +242,21 @@ func _process(delta: float) -> void:
 	if _hello_timer >= HELLO_INTERVAL:
 		_hello_timer = 0.0
 		_send_hello()
-	var packets: Array[PackedByteArray] = []
 	if _io_thread != null:
 		_io_mutex.lock()
-		packets = _inbox
-		_inbox = []
+		var parsed := _parsed
+		_parsed = []
 		_io_mutex.unlock()
+		for entry: Array in parsed:
+			stats["packets"] += 1
+			stats["bytes"] += int(entry[0])
+			_waiting.append_array(entry[1])
+			_waiting_len.append_array(entry[2])
+			if int(entry[3]) > 0:
+				stats["bad_json"] = int(stats.get("bad_json", 0)) + int(entry[3])
 	else:
 		while _udp.get_available_packet_count() > 0:
-			packets.append(_udp.get_packet())
-	for packet in packets:
-		_queue(packet)
+			_queue(_udp.get_packet())
 	_drain()
 	# A new session's mod starts at 0, and keeps the level through a resync: sent after each
 	# handshake unless it is 0 and was never anything else.
@@ -218,15 +275,18 @@ func _process(delta: float) -> void:
 		connection_lost.emit()
 
 
-## Messages waiting to be handled (text), oldest first from _waiting_at.
-var _waiting := PackedStringArray()
+## Messages waiting to be handled (read from their JSON), oldest first from _waiting_at, and the
+## length of each one's text.
+var _waiting: Array = []
+var _waiting_len := PackedInt32Array()
 var _waiting_at := 0
 ## Main-thread time a frame spends handling messages: a big base sends 6,000 belt items several
 ## times a second, which took 20-40 ms to handle in one frame and made the view stutter. The rest
 ## wait for the next frame; past BACKLOG_MESSAGES waiting, a frame takes up to twice as long.
 ## 4 ms, not 6: the world's chunk rebuilds come after it in the same frame (world.gd shares one
 ## allowance with it), and together they made the 20 ms frames walking on the owner's save.
-const HANDLE_USEC := 4000
+const HANDLE_USEC := 4000  # its slice in frame_budget.gd
+const FrameBudget := preload("res://scripts/world/frame_budget.gd")
 const BACKLOG_MESSAGES := 300
 ## This frame's message handling, in µs, for world.gd's share of the frame.
 var frame_handle_usec := 0
@@ -235,21 +295,25 @@ const SLOW_MESSAGE_USEC := 8000
 var slow_messages: Array = []
 
 
+## Without the I/O thread: read here.
 func _queue(packet: PackedByteArray) -> void:
 	stats["packets"] += 1
 	stats["bytes"] += packet.size()
 	var text := packet.get_string_from_utf8()
-	if text.contains("\n"):
-		_waiting.append_array(text.split("\n", false))
-	else:
-		_waiting.append(text)
+	for line in (text.split("\n", false) if text.contains("\n") else PackedStringArray([text])):
+		var msg = parse(line)
+		if msg is Dictionary:
+			_waiting.append(msg)
+			_waiting_len.append(line.length())
 
 
 var _json := JSON.new()
 ## A bare inf, -inf or nan where a number goes: Factorio's table_to_json writes a Lua float that
 ## isn't finite as it is, which isn't JSON.
-var _not_finite := RegEx.create_from_string("([:,[]) *(-?)(inf|nan|-nan) *(?=[]},])")
+const NOT_FINITE := "([:,[]) *(-?)(inf|nan|-nan) *(?=[]},])"
+var _not_finite := RegEx.create_from_string(NOT_FINITE)
 var _bad_types := {}
+var _bad_mutex := Mutex.new()
 
 
 ## One message's text as its Dictionary (or whatever else it held), null when it isn't JSON. A
@@ -257,46 +321,60 @@ var _bad_types := {}
 ## base, the whole message lost) is read with them as 1e18, -1e18 or 0, counted in stats
 ## ("bad_json") and reported once per message type with where it was.
 func parse(text: String) -> Variant:
-	if _json.parse(text) == OK:
-		return _json.data
+	var got: Array = _parse_with(_json, _not_finite, text)
+	if got[1]:
+		stats["bad_json"] = int(stats.get("bad_json", 0)) + 1
+	return got[0]
+
+
+## [what `text` holds or null, whether it had numbers that aren't finite], with the JSON and RegEx
+## of the thread it runs on.
+func _parse_with(json: JSON, not_finite: RegEx, text: String) -> Array:
+	if json.parse(text) == OK:
+		return [json.data, false]
 	if not (text.contains("inf") or text.contains("nan")):
-		return null
-	var fixed := _not_finite.sub(text, "$1$2NOT_FINITE_$3", true)
+		return [null, false]
+	var fixed := not_finite.sub(text, "$1$2NOT_FINITE_$3", true)
 	fixed = fixed.replace("-NOT_FINITE_inf", "-1e18").replace("NOT_FINITE_inf", "1e18")
 	fixed = fixed.replace("-NOT_FINITE_nan", "0").replace("NOT_FINITE_-nan", "0").replace("NOT_FINITE_nan", "0")
-	if _json.parse(fixed) != OK:
-		return null
-	stats["bad_json"] = int(stats.get("bad_json", 0)) + 1
-	var data = _json.data
+	if json.parse(fixed) != OK:
+		return [null, false]
+	var data = json.data
 	var kind := str(data.get("t", "?")) if data is Dictionary else "?"
-	if not _bad_types.has(kind):
-		_bad_types[kind] = true
+	_bad_mutex.lock()
+	var first := not _bad_types.has(kind)
+	_bad_types[kind] = true
+	_bad_mutex.unlock()
+	if first:
 		var at := maxi(text.find("inf"), text.find("nan"))
 		push_warning("bridge: a '%s' message had a number that isn't finite (read as 1e18 or 0): ...%s..." % [kind, text.substr(maxi(0, at - 120), 160)])
-	return data
+	return [data, true]
 
 
 func _drain() -> void:
 	var start := Time.get_ticks_usec()
-	var limit := HANDLE_USEC * (2 if _waiting.size() - _waiting_at > BACKLOG_MESSAGES else 1)
-	while _waiting_at < _waiting.size():
+	var limit := FrameBudget.grant(&"messages", 2 if _waiting.size() - _waiting_at > BACKLOG_MESSAGES else 1)
+	while limit > 0 and _waiting_at < _waiting.size():
 		var t0 := Time.get_ticks_usec()
-		var msg = parse(_waiting[_waiting_at])
+		var msg = _waiting[_waiting_at]
 		_waiting_at += 1
 		if msg is Dictionary:
 			_handle(msg)
 			var spent := Time.get_ticks_usec() - t0
 			if spent > SLOW_MESSAGE_USEC and slow_messages.size() < 200:
-				slow_messages.append([spent / 1000.0, str(msg.get("t", "")), _waiting[_waiting_at - 1].length()])
+				slow_messages.append([spent / 1000.0, str(msg.get("t", "")), _waiting_len[_waiting_at - 1]])
 		if Time.get_ticks_usec() - start > limit:
 			break
 	frame_handle_usec = Time.get_ticks_usec() - start
 	stats["handle_usec"] += frame_handle_usec
+	FrameBudget.spent(&"messages", frame_handle_usec, _waiting.size() - _waiting_at)
 	if _waiting_at >= _waiting.size():
 		_waiting.clear()
+		_waiting_len.clear()
 		_waiting_at = 0
 	elif _waiting_at > 4096:
 		_waiting = _waiting.slice(_waiting_at)
+		_waiting_len = _waiting_len.slice(_waiting_at)
 		_waiting_at = 0
 
 
@@ -379,7 +457,8 @@ func _send_resync() -> void:
 func _send_hello() -> void:
 	# z: bi, ih and mv lists delta-coded (see PROTOCOL.md), most of a busy base's traffic.
 	# dc: decoratives (dprotos, dec), as Settings → Graphics → Decoratives says (main.gd sets it).
-	var hello := {"t": "hello", "v": PROTOCOL, "sid": _session, "w": 1 if connected else 0, "z": 1, "b": 1}
+	# bl: belt lanes that didn't change aren't sent again; belt_items.gd keeps their items (bi ln, dl).
+	var hello := {"t": "hello", "v": PROTOCOL, "sid": _session, "w": 1 if connected else 0, "z": 1, "b": 1, "bl": 1}
 	if decoratives:
 		hello["dc"] = 1
 	send(hello)

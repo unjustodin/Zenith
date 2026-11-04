@@ -5,13 +5,18 @@ shader_type spatial;
 // vertical, cut out here; the ones lying flat are blended (decorative_flat.gdshader).
 render_mode cull_disabled, shadows_disabled;
 
+#include "res://shaders/ground_height.gdshaderinc"
+
 uniform sampler2D atlas : source_color, filter_linear_mipmap_anisotropic, repeat_disable;
 uniform bool upright = false;
 
 void vertex() {
 	UV = vec2(INSTANCE_CUSTOM.x + UV.x * INSTANCE_CUSTOM.y, UV.y * INSTANCE_CUSTOM.z);
-	if (upright) {
+	if (!upright) {
+		VERTEX = ground_lift(VERTEX, MODEL_MATRIX);
+	} else {
 		mat4 m = MODEL_MATRIX;
+		m[3].y += ground_h(m[3].xz);
 		MODELVIEW_MATRIX = VIEW_MATRIX * mat4(
 			vec4(normalize(cross(vec3(0.0, 1.0, 0.0), INV_VIEW_MATRIX[2].xyz)), 0.0),
 			vec4(0.0, 1.0, 0.0, 0.0),

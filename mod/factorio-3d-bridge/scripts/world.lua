@@ -5,6 +5,7 @@
 local registry = require("scripts.registry")
 local transport = require("scripts.transport")
 local budget = require("scripts.budget")
+local alt_mode = require("scripts.alt_mode")
 
 local M = {}
 
@@ -226,6 +227,20 @@ function M.record(entity)
     for k, v in pairs(more) do
       x[k] = v
     end
+  end
+  -- Alt-mode's icon (issue #9): with the record, so every loaded machine has it, no scanning.
+  -- and its machine or pump arrows (part 2, extra.fa).
+  if rec[1] ~= 0 and alt_mode.TYPES[entity.type] then
+    local icon, arrows = alt_mode.state(entity)
+    if icon then
+      x = x or {}
+      x.ai = icon
+    end
+    if arrows then
+      x = x or {}
+      x.fa = arrows
+    end
+    alt_mode.recorded(entity, icon, x, arrows)
   end
   if x then
     rec[6] = x
